@@ -13,6 +13,13 @@ import {
 import {type Effect, Redacted} from "effect";
 import {z} from "zod";
 
+import {
+  type ArtifactShortNameStore,
+  checkShortName,
+  listArtifactShortNames,
+  maximumShortNameLength,
+  setArtifactShortName,
+} from "../application/artifact-short-names.js";
 import {AgentDispatchService} from "../application/agent-dispatch.js";
 import {
   type ApplicationServices,
@@ -383,6 +390,8 @@ export interface ArtifactMcpServerDependencies {
   readonly linkedArtifacts?: boolean;
   readonly mode: "local" | "remote";
   readonly requestId: string;
+  /** Short-name store; the short-name tools exist only when it is present. */
+  readonly shortNames: ArtifactShortNameStore | null;
 }
 
 function runMcpApplicationEffect<A, E>(
@@ -2287,6 +2296,119 @@ export function createArtifactMcpServer(
       };
     },
   );
+
+  const shortNames = dependencies.shortNames;
+  if (shortNames !== null) {
+    const shortNameUrl = (shortName: string): string =>
+      versionBrowserUrl(applicationUrl, dependencies.contentDomain, shortName);
+
+    registerNudgedTool(
+      "artifact_set_short_name",
+      {
+        title: "Set an artifact short name",
+        description:
+          `Give an artifact a memorable content-host name: <shortName>.${dependencies.contentDomain} then always redirects to its current version (the review page when private). Pass null to remove it. Names are ${maximumShortNameLength} characters at most and unique across the installation; when the name is invalid or taken, nothing changes and free suggestions are returned. Call artifact_short_names first to see names in use.`,
+        inputSchema: z.object({
+          artifactId: artifactIdSchema,
+          projectId: optionalProjectIdSchema,
+          shortName: z.string().max(200).nullable(),
+        }).strict(),
+        outputSchema: z.object({
+          message: z.string().optional(),
+          shortName: z.string().nullable(),
+          status: z.enum(["assigned", "cleared", "invalid", "taken"]),
+          suggestions: z.array(z.string()),
+          url: z.string().nullable(),
+        }).strict(),
+        annotations: idempotentWriteAnnotations,
+      },
+      async (input) => toolResult(async () => {
+        const change = await runMcpApplicationEffect(
+          dependencies,
+          setArtifactShortName(shortNames, {...input, principal: identity.principal}),
+        );
+        switch (change.status) {
+          case "assigned":
+            return {
+              shortName: change.shortName,
+              status: change.status,
+              suggestions: [],
+              url: shortNameUrl(change.shortName),
+            };
+          case "cleared":
+            return {shortName: null, status: change.status, suggestions: [], url: null};
+          default:
+            return {
+              message: change.message,
+              shortName: null,
+              status: change.status,
+              suggestions: [...change.suggestions],
+              url: null,
+            };
+        }
+      }),
+    );
+
+    registerNudgedTool(
+      "artifact_short_names",
+      {
+        title: "List artifact short names",
+        description:
+          "List the short names in use in a project, with the artifact each one redirects to. Pass check to also learn whether one candidate name is free; when it is not, free suggestions are returned.",
+        inputSchema: z.object({
+          artifactId: artifactIdSchema.nullable().default(null),
+          check: z.string().max(200).nullable().default(null),
+          projectId: optionalProjectIdSchema,
+        }).strict(),
+        outputSchema: z.object({
+          check: z.object({
+            available: z.boolean(),
+            message: z.string().nullable(),
+            shortName: z.string(),
+            suggestions: z.array(z.string()),
+          }).strict().nullable(),
+          shortNames: z.array(z.object({
+            artifactId: z.string(),
+            artifactName: z.string(),
+            assignedAt: z.string(),
+            projectId: z.string(),
+            shortName: z.string(),
+            url: z.string(),
+          }).strict()),
+        }).strict(),
+        annotations: readOnlyAnnotations,
+      },
+      async ({artifactId, check, projectId}) => toolResult(async () => {
+        const entries = await runMcpApplicationEffect(
+          dependencies,
+          listArtifactShortNames(shortNames, {principal: identity.principal, projectId}),
+        );
+        const availability = check === null
+          ? null
+          : await runMcpApplicationEffect(
+            dependencies,
+            checkShortName(shortNames, {
+              artifactId,
+              principal: identity.principal,
+              shortName: check,
+            }),
+          );
+        return {
+          check: availability === null
+            ? null
+            : {...availability, suggestions: [...availability.suggestions]},
+          shortNames: entries.map((entry) => ({
+            artifactId: entry.artifactId,
+            artifactName: entry.artifactName,
+            assignedAt: entry.assignedAt,
+            projectId: entry.projectId,
+            shortName: entry.shortName,
+            url: shortNameUrl(entry.shortName),
+          })),
+        };
+      }),
+    );
+  }
 
   return server;
 }

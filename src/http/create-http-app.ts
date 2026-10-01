@@ -148,6 +148,14 @@ import {artifactServerFailureResponse} from "./artifact-http-failure.js";
 import {attachmentContentDisposition} from "./content-disposition.js";
 import {observeHttpRequest} from "../observability/application-observability.js";
 import {
+  type ArtifactShortNameStore,
+  checkShortName,
+  getArtifactShortName,
+  listArtifactShortNames,
+  setArtifactShortName,
+  shortNameProblem,
+} from "../application/artifact-short-names.js";
+import {
   createVersionArchive,
   versionArchiveFilename,
 } from "./version-archive.js";
@@ -167,6 +175,9 @@ const createProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
 }).strict();
 const renameProjectSchema = createProjectSchema;
+const changeShortNameSchema = z.object({
+  shortName: z.string().max(200).nullable(),
+}).strict();
 const setProjectGitHistorySchema = z.discriminatedUnion("enabled", [
   z.object({enabled: z.literal(false)}).strict(),
   z.object({
@@ -489,6 +500,8 @@ export interface HttpAppDependencies {
   readonly mcpOAuthResource?: McpOAuthResourceConfiguration;
   readonly readiness?: ReadinessProbe;
   readonly runtimeLifecycle?: RuntimeLifecycle;
+  /** Short-name store; present only where the short-name capability is on. */
+  readonly shortNames?: ArtifactShortNameStore;
   readonly trustedApplicationOrigin: string | null;
   readonly webAssets?: WebAssetStore;
 }
@@ -557,6 +570,7 @@ export function createHttpApp(
     linkedArtifacts: dependencies.linkedArtifacts === true,
     mode: dependencies.trustedApplicationOrigin === null ? "local" : "remote",
     oauthResource: dependencies.mcpOAuthResource?.resource ?? null,
+    shortNames: dependencies.shortNames ?? null,
   });
   const boundedJsonBody = bodyLimit({
     maxSize: maximumJsonRequestBytes,
@@ -692,6 +706,8 @@ export function createHttpApp(
 
   app.use("*", async (context, next) => {
     const requestUrl = new URL(context.req.url);
+    const shortNameResponse = await redirectShortNameHost(requestUrl, dependencies);
+    if (shortNameResponse !== null) return shortNameResponse;
     const contentToken = tokenFromContentHost(
       requestUrl.hostname,
       dependencies.contentDomain,
@@ -2088,6 +2104,97 @@ export function createHttpApp(
     },
   );
 
+  app.get("/api/v1/short-names", async (context) => {
+    const shortNames = requireShortNames(dependencies);
+    const entries = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      listArtifactShortNames(shortNames, {
+        principal: context.get("principal"),
+        projectId: requestedProjectId(context),
+      }),
+    );
+    return context.json({
+      shortNames: entries.map((entry) => ({
+        artifactId: entry.artifactId,
+        artifactName: entry.artifactName,
+        assignedAt: entry.assignedAt,
+        projectId: entry.projectId,
+        shortName: entry.shortName,
+        url: shortNameBrowserUrl(context, dependencies, entry.shortName),
+      })),
+    });
+  });
+
+  app.get("/api/v1/short-names/:shortName/availability", async (context) => {
+    const shortNames = requireShortNames(dependencies);
+    const availability = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      checkShortName(shortNames, {
+        artifactId: context.req.query("artifactId") ?? null,
+        principal: context.get("principal"),
+        shortName: context.req.param("shortName"),
+      }),
+    );
+    return context.json(availability);
+  });
+
+  app.get("/api/v1/artifacts/:artifactId/short-name", async (context) => {
+    const shortNames = requireShortNames(dependencies);
+    const shortName = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      getArtifactShortName(shortNames, {
+        artifactId: context.req.param("artifactId"),
+        principal: context.get("principal"),
+        projectId: requestedProjectId(context),
+      }),
+    );
+    return context.json({
+      shortName,
+      url: shortName === null
+        ? null
+        : shortNameBrowserUrl(context, dependencies, shortName),
+    });
+  });
+
+  app.put(
+    "/api/v1/artifacts/:artifactId/short-name",
+    boundedJsonBody,
+    async (context) => {
+      const shortNames = requireShortNames(dependencies);
+      const body = changeShortNameSchema.parse(await context.req.json());
+      const change = await runHttpApplicationEffect(
+        context,
+        dependencies,
+        setArtifactShortName(shortNames, {
+          artifactId: context.req.param("artifactId"),
+          principal: context.get("principal"),
+          projectId: requestedProjectId(context),
+          shortName: body.shortName,
+        }),
+      );
+      switch (change.status) {
+        case "assigned":
+          return context.json({
+            shortName: change.shortName,
+            url: shortNameBrowserUrl(context, dependencies, change.shortName),
+          });
+        case "cleared":
+          return context.json({shortName: null, url: null});
+        default:
+          return context.json({
+            error: {
+              code: change.status === "taken" ? "SHORT_NAME_TAKEN" : "INVALID_SHORT_NAME",
+              message: change.message,
+              suggestions: change.suggestions,
+            },
+          }, change.status === "taken" ? 409 : 422);
+      }
+    },
+  );
+
   app.patch(
     "/api/v1/artifacts/:artifactId/tags",
     boundedJsonBody,
@@ -2714,6 +2821,29 @@ function requireLocalOwnerExchangeBoundary(
 
 function isUnsafeMethod(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function requireShortNames(
+  dependencies: HttpAppDependencies,
+): ArtifactShortNameStore {
+  if (dependencies.shortNames === undefined) {
+    throw new CapabilityUnavailable({
+      message: "Short names are not enabled on this installation.",
+    });
+  }
+  return dependencies.shortNames;
+}
+
+function shortNameBrowserUrl(
+  context: Context<HttpEnvironment>,
+  dependencies: HttpAppDependencies,
+  shortName: string,
+): string {
+  return versionBrowserUrl(
+    responseApplicationUrl(context, dependencies),
+    dependencies.contentDomain,
+    shortName,
+  );
 }
 
 function requestedProjectId(context: Context<HttpEnvironment>): string | null {
@@ -3983,6 +4113,48 @@ function emptyByteStream(): ReadableStream<Uint8Array> {
     start(controller) {
       controller.close();
     },
+  });
+}
+
+/**
+ * Redirect `<short name>.<content domain>` to the named artifact's current
+ * version: the review page for private artifacts, the version origin for
+ * public links. Never serves content, so version-origin isolation is
+ * unchanged. Returns null for every host that is not an assigned short name.
+ */
+async function redirectShortNameHost(
+  requestUrl: URL,
+  dependencies: HttpAppDependencies,
+): Promise<Response | null> {
+  if (
+    dependencies.shortNames === undefined ||
+    dependencies.trustedApplicationOrigin === null
+  ) {
+    return null;
+  }
+  const suffix = `.${dependencies.contentDomain.toLowerCase()}`;
+  const hostname = requestUrl.hostname.toLowerCase();
+  if (!hostname.endsWith(suffix)) return null;
+  const label = hostname.slice(0, -suffix.length);
+  if (shortNameProblem(label) !== null) return null;
+  const target = await dependencies.shortNames.resolve(label);
+  if (target === null) return null;
+  const applicationUrl = new URL(dependencies.trustedApplicationOrigin);
+  const location = target.accessSetting === accessSettings.publicLink
+    ? artifactBrowserUrl(applicationUrl, target.artifactId)
+    : artifactReviewUrl(
+      applicationUrl,
+      target.projectId,
+      target.artifactId,
+      target.currentVersionId,
+    );
+  return new Response(null, {
+    headers: {
+      "Cache-Control": "no-store",
+      Location: location,
+      "Referrer-Policy": "no-referrer",
+    },
+    status: 302,
   });
 }
 

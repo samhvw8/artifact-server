@@ -364,6 +364,20 @@ const artifactPageSchema: z.ZodType<ArtifactPage> = z.object({
   nextCursor: z.string().nullable(),
 });
 
+const shortNameSchema = z.object({
+  shortName: z.string().nullable(),
+  url: z.url().nullable(),
+});
+export type ArtifactShortName = z.infer<typeof shortNameSchema>;
+
+const shortNameAvailabilitySchema = z.object({
+  available: z.boolean(),
+  message: z.string().nullable(),
+  shortName: z.string(),
+  suggestions: z.array(z.string()),
+});
+export type ShortNameAvailability = z.infer<typeof shortNameAvailabilitySchema>;
+
 const artifactDetailsSchema: z.ZodType<ArtifactDetails> = z.object({
   artifact: artifactSchema,
   current: artifactVersionSchema,
@@ -1035,6 +1049,23 @@ export const api = {
       headers: mutationHeaders(idempotencyKey),
       method: "PATCH",
     },
+  ),
+  shortName: (projectId: string, artifactId: string) => request(
+    shortNameSchema,
+    `/api/v1/artifacts/${encodeURIComponent(artifactId)}/short-name?${projectQuery(projectId)}`,
+  ),
+  setShortName: (projectId: string, artifactId: string, shortName: string | null) => request(
+    shortNameSchema,
+    `/api/v1/artifacts/${encodeURIComponent(artifactId)}/short-name?${projectQuery(projectId)}`,
+    {
+      body: JSON.stringify({shortName}),
+      headers: mutationHeaders(),
+      method: "PUT",
+    },
+  ),
+  shortNameAvailability: (shortName: string, artifactId: string) => request(
+    shortNameAvailabilitySchema,
+    `/api/v1/short-names/${encodeURIComponent(shortName)}/availability?${new URLSearchParams({artifactId})}`,
   ),
   changeTags: (
     projectId: string,

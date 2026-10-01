@@ -2479,6 +2479,22 @@ select:focus-visible {
   color: var(--as-love);
 }
 
+.as-short-name__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.as-short-name__suggestion {
+  border: 0;
+  cursor: pointer;
+}
+
+.as-short-name__link {
+  color: var(--as-iris);
+  font: 0.78rem/1.4 "Atkinson Hyperlegible Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
 .as-tag-editor__actions {
   display: flex;
   gap: 0.4rem;

@@ -49,9 +49,11 @@ import {
   type ArtifactComparison,
   type ArtifactDetails,
   type ArtifactPage,
+  type ArtifactShortName,
   type ArtifactVersion,
   type Project,
   type Session,
+  type ShortNameAvailability,
   type Version,
 } from "@/api/client";
 import {
@@ -2146,6 +2148,11 @@ function DetailsInspector({
         key={details.artifact.id}
         onChange={onTagsChange}
       />
+      <ShortNameInspector
+        artifact={details.artifact}
+        canManage={canManage}
+        key={`short-name-${details.artifact.id}`}
+      />
       {details.sourceBinding === undefined ? null : (
         <InspectorSection count={2} title="Linked source">
           <InspectorRow label="state" value={sourceFreshnessLabel(details.sourceBinding.status)} />
@@ -2263,6 +2270,169 @@ function TagsInspector({
       ) : artifact.tags.map((tag) => (
         <span className="as-tag" key={tag}>{tag}</span>
       ))}
+    </InspectorSection>
+  );
+}
+
+/** Optional memorable `<name>.<content domain>` redirect; hidden where the server lacks it. */
+function ShortNameInspector({
+  artifact,
+  canManage,
+}: {
+  readonly artifact: ArtifactDetails["artifact"];
+  readonly canManage: boolean;
+}) {
+  const [current, setCurrent] = useState<ArtifactShortName | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [value, setValue] = useState("");
+  const [availability, setAvailability] = useState<ShortNameAvailability | null>(null);
+  const candidate = useDeferredValue(value.trim().toLowerCase());
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const loaded = await api.shortName(artifact.projectId, artifact.id);
+        if (active) setCurrent(loaded);
+      } catch (caught) {
+        if (!active) return;
+        if (caught instanceof ApiError && caught.code === "CAPABILITY_UNAVAILABLE") {
+          setUnavailable(true);
+        } else {
+          setError(caught instanceof Error ? caught.message : "Short name failed to load.");
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [artifact.id, artifact.projectId]);
+
+  useEffect(() => {
+    if (!editing || candidate === "" || candidate === current?.shortName) {
+      setAvailability(null);
+      return undefined;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const checked = await api.shortNameAvailability(candidate, artifact.id);
+          if (active) setAvailability(checked);
+        } catch {
+          if (active) setAvailability(null);
+        }
+      })();
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [artifact.id, candidate, current?.shortName, editing]);
+
+  if (unavailable) return null;
+
+  const startEditing = (): void => {
+    setValue(current?.shortName ?? "");
+    setError(null);
+    setEditing(true);
+  };
+  const save = async (shortName: string | null): Promise<void> => {
+    setPending(true);
+    setError(null);
+    try {
+      setCurrent(await api.setShortName(artifact.projectId, artifact.id, shortName));
+      setEditing(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Short name update failed.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <InspectorSection
+      action={editing || !canManage ? null : (
+        <button className="as-inspector-section__action" onClick={startEditing} type="button">
+          {current?.shortName === null || current === null ? "Set name" : "Rename"}
+        </button>
+      )}
+      count={current?.shortName === null || current === null ? 0 : 1}
+      title="Short name"
+    >
+      {editing ? (
+        <form
+          className="as-tag-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save(value);
+          }}
+        >
+          <label className="as-visually-hidden" htmlFor={`review-short-name-${artifact.id}`}>
+            Short name
+          </label>
+          <input
+            autoFocus
+            disabled={pending}
+            id={`review-short-name-${artifact.id}`}
+            onChange={(event) => setValue(event.currentTarget.value)}
+            placeholder="hsk-notebook"
+            value={value}
+          />
+          {availability === null ? (
+            <p>Lowercase letters, digits, and hyphens. The name redirects to the current version.</p>
+          ) : availability.available ? (
+            <p>{availability.shortName} is free.</p>
+          ) : (
+            <p className="as-tag-editor__error" role="status">{availability.message}</p>
+          )}
+          {availability === null || availability.suggestions.length === 0 ? null : (
+            <div className="as-short-name__suggestions">
+              {availability.suggestions.map((suggestion) => (
+                <button
+                  className="as-tag as-short-name__suggestion"
+                  key={suggestion}
+                  onClick={() => setValue(suggestion)}
+                  type="button"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
+          {error === null ? null : (
+            <p className="as-tag-editor__error" role="alert">{error}</p>
+          )}
+          <div className="as-tag-editor__actions">
+            <button
+              className="as-button as-button--primary"
+              disabled={pending || availability?.available === false}
+              type="submit"
+            >
+              {pending ? "Saving…" : "Save name"}
+            </button>
+            {current?.shortName === null || current === null ? null : (
+              <button className="as-button" disabled={pending} onClick={() => void save(null)} type="button">
+                Remove
+              </button>
+            )}
+            <button className="as-button" disabled={pending} onClick={() => setEditing(false)} type="button">
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : current?.url === null || current === null ? (
+        <p className="as-inspector-empty">
+          {error ?? "No short name. Set one to get a memorable link."}
+        </p>
+      ) : (
+        <a className="as-short-name__link" href={current.url} rel="noreferrer" target="_blank">
+          {new URL(current.url).host}
+        </a>
+      )}
     </InspectorSection>
   );
 }

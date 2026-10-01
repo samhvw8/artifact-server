@@ -217,6 +217,8 @@ describe("modern MCP HTTP", () => {
       "comment_delete",
       "comment_clear",
       "dispatch_inbox",
+      "artifact_set_short_name",
+      "artifact_short_names",
     ]);
     expect(tools.some((tool) => tool.name.includes("inline"))).toBe(false);
     expect(tools.find((tool) => tool.name === "artifact_delete")?.annotations)
@@ -652,6 +654,28 @@ describe("modern MCP HTTP", () => {
       })).structuredContent,
     );
     expect(tagged.artifact.currentVersionId).toBe(updated.version.id);
+
+    const named = z.object({shortName: z.string(), status: z.literal("assigned")}).parse(
+      (await callTool(server, installation.apiToken, {
+        arguments: {artifactId: committed.artifact.id, shortName: "mcp-proof"},
+        name: "artifact_set_short_name",
+      })).structuredContent,
+    );
+    expect(named.shortName).toBe("mcp-proof");
+    const shortNames = z.object({
+      check: z.object({available: z.boolean(), suggestions: z.array(z.string())}),
+      shortNames: z.array(z.object({artifactId: z.string(), shortName: z.string()})),
+    }).parse(
+      (await callTool(server, installation.apiToken, {
+        arguments: {check: "mcp-proof"},
+        name: "artifact_short_names",
+      })).structuredContent,
+    );
+    expect(shortNames.check.available).toBe(false);
+    expect(shortNames.check.suggestions).toContain("mcp-proof-2");
+    expect(shortNames.shortNames).toContainEqual(
+      expect.objectContaining({artifactId: committed.artifact.id, shortName: "mcp-proof"}),
+    );
 
     const staleVisibility = await callTool(server, installation.apiToken, {
       arguments: {

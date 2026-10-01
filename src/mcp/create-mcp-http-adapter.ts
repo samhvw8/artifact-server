@@ -11,6 +11,7 @@ import {
 import {Effect, Redacted} from "effect";
 import {z} from "zod";
 
+import type {ArtifactShortNameStore} from "../application/artifact-short-names.js";
 import {
   type ApplicationRuntime,
   runApplicationEffect,
@@ -64,6 +65,7 @@ export interface McpHttpAdapterDependencies {
   readonly linkedArtifacts?: boolean;
   readonly mode: ArtifactMcpServerDependencies["mode"];
   readonly oauthResource: string | null;
+  readonly shortNames: ArtifactShortNameStore | null;
 }
 
 /** Stateless MCP HTTP adapter mounted by every Artifact Server deployment. */
@@ -90,6 +92,7 @@ export function createMcpHttpAdapter(
         linkedArtifacts: dependencies.linkedArtifacts === true,
         mode: dependencies.mode,
         requestId: requestIdFrom(context.requestInfo),
+        shortNames: dependencies.shortNames,
       };
       return createArtifactMcpServer(
         serverDependencies,

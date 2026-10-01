@@ -418,6 +418,7 @@ export class ArtifactRepositoryFailure extends Schema.TaggedError<ArtifactReposi
       "readProjectGitHistoryProgress",
       "renameProject",
       "setProjectArchive",
+      "shortName",
       "storeProjectGitHistorySetting",
     ]),
   },
