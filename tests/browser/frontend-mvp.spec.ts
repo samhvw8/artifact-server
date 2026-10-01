@@ -1182,6 +1182,15 @@ test.describe("Artifact Server frontend MVP", () => {
       await share.getByRole("button", {name: "Back to Share"}).click();
 
       await share.getByRole("button", {name: "Manage access"}).click();
+      await share.getByRole("radio", {name: /Share code/u}).check();
+      await share.getByRole("button", {name: "Save"}).click();
+      await expect(share.getByText(
+        /People with the share code can open the latest version/u,
+      )).toBeVisible();
+      await expect(share.getByText(/^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/u)).toBeVisible();
+      await expect(share.getByText(/\?share_code=/u)).toBeVisible();
+
+      await share.getByRole("button", {name: "Manage access"}).click();
       await expect(share.getByRole("heading", {name: "Artifact access"})).toBeVisible();
       await share.getByRole("radio", {name: /Public link/u}).check();
       await share.getByRole("button", {name: "Save"}).click();

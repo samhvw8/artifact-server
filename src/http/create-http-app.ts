@@ -148,6 +148,19 @@ import {artifactServerFailureResponse} from "./artifact-http-failure.js";
 import {attachmentContentDisposition} from "./content-disposition.js";
 import {observeHttpRequest} from "../observability/application-observability.js";
 import {
+  type ArtifactShareCodeStore,
+  getArtifactShareCode,
+  issueShareGrant,
+  setArtifactShareCode,
+  ShareCodeAttemptLimiter,
+  type ShareCodeChangeRequest,
+  shareCodeMatches,
+  shareCodeQueryParameter,
+  type ShareCodeTarget,
+  shareGrantLifetimeSeconds,
+  verifyShareGrant,
+} from "../application/artifact-share-codes.js";
+import {
   type ArtifactShortNameStore,
   checkShortName,
   getArtifactShortName,
@@ -177,6 +190,9 @@ const createProjectSchema = z.object({
 const renameProjectSchema = createProjectSchema;
 const changeShortNameSchema = z.object({
   shortName: z.string().max(200).nullable(),
+}).strict();
+const changeShareCodeSchema = z.object({
+  shareCode: z.string().max(200).nullable(),
 }).strict();
 const setProjectGitHistorySchema = z.discriminatedUnion("enabled", [
   z.object({enabled: z.literal(false)}).strict(),
@@ -500,6 +516,8 @@ export interface HttpAppDependencies {
   readonly mcpOAuthResource?: McpOAuthResourceConfiguration;
   readonly readiness?: ReadinessProbe;
   readonly runtimeLifecycle?: RuntimeLifecycle;
+  /** Share-code store; present only where the share-code capability is on. */
+  readonly shareCodes?: ArtifactShareCodeStore;
   /** Short-name store; present only where the short-name capability is on. */
   readonly shortNames?: ArtifactShortNameStore;
   readonly trustedApplicationOrigin: string | null;
@@ -570,8 +588,10 @@ export function createHttpApp(
     linkedArtifacts: dependencies.linkedArtifacts === true,
     mode: dependencies.trustedApplicationOrigin === null ? "local" : "remote",
     oauthResource: dependencies.mcpOAuthResource?.resource ?? null,
+    shareCodes: dependencies.shareCodes ?? null,
     shortNames: dependencies.shortNames ?? null,
   });
+  const shareCodeAttempts = new ShareCodeAttemptLimiter();
   const boundedJsonBody = bodyLimit({
     maxSize: maximumJsonRequestBytes,
     onError: (context) =>
@@ -710,6 +730,7 @@ export function createHttpApp(
       context,
       requestUrl,
       dependencies,
+      shareCodeAttempts,
     );
     if (shortNameResponse !== null) return shortNameResponse;
     const contentToken = tokenFromContentHost(
@@ -745,6 +766,16 @@ export function createHttpApp(
           dependencies,
         );
       }
+      const sharedResponse = await serveShareCodeContent(
+        context,
+        requestUrl,
+        contentToken,
+        null,
+        null,
+        dependencies,
+        shareCodeAttempts,
+      );
+      if (sharedResponse !== null) return sharedResponse;
       return serveVersionContent(
         context,
         requestUrl,
@@ -2199,6 +2230,79 @@ export function createHttpApp(
     },
   );
 
+  app.get("/api/v1/artifacts/:artifactId/share-code", async (context) => {
+    const shareCodes = requireShareCodes(dependencies);
+    const artifactId = context.req.param("artifactId");
+    const shareCode = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      getArtifactShareCode(shareCodes, {
+        artifactId,
+        principal: context.get("principal"),
+        projectId: requestedProjectId(context),
+      }),
+    );
+    return context.json(
+      await shareCodeResponse(context, dependencies, artifactId, shareCode),
+    );
+  });
+
+  const changeShareCode = async (
+    context: Context<HttpEnvironment>,
+    change: ShareCodeChangeRequest,
+  ): Promise<Response> => {
+    const shareCodes = requireShareCodes(dependencies);
+    const artifactId = context.req.param("artifactId") ?? "";
+    const outcome = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      setArtifactShareCode(shareCodes, {
+        artifactId,
+        principal: context.get("principal"),
+        projectId: requestedProjectId(context),
+        request: change,
+      }),
+    );
+    switch (outcome.status) {
+      case "set":
+        return context.json(
+          await shareCodeResponse(context, dependencies, artifactId, outcome.shareCode),
+        );
+      case "cleared":
+        return context.json(
+          await shareCodeResponse(context, dependencies, artifactId, null),
+        );
+      default:
+        return context.json({
+          error: {
+            code: outcome.status === "invalid"
+              ? "INVALID_SHARE_CODE"
+              : "SHARE_CODE_REQUIRES_PRIVATE",
+            message: outcome.message,
+          },
+        }, outcome.status === "invalid" ? 422 : 409);
+    }
+  };
+
+  app.post(
+    "/api/v1/artifacts/:artifactId/share-code",
+    (context) => changeShareCode(context, {kind: "generate"}),
+  );
+
+  app.put(
+    "/api/v1/artifacts/:artifactId/share-code",
+    boundedJsonBody,
+    async (context) => {
+      const body = changeShareCodeSchema.parse(await context.req.json());
+      return changeShareCode(
+        context,
+        body.shareCode === null
+          ? {kind: "clear"}
+          : {kind: "set", shareCode: body.shareCode},
+      );
+    },
+  );
+
   app.patch(
     "/api/v1/artifacts/:artifactId/tags",
     boundedJsonBody,
@@ -2544,6 +2648,30 @@ export function createHttpApp(
   });
 
   app.get("/artifacts/:artifactId", async (context) => {
+    // A private artifact with a share code opens on its current version
+    // host, which asks for the code (or takes the one in the link).
+    const shared = await dependencies.shareCodes?.resolveArtifact(
+      context.req.param("artifactId"),
+    ) ?? null;
+    if (shared !== null) {
+      const location = new URL(versionBrowserUrl(
+        responseApplicationUrl(context, dependencies),
+        dependencies.contentDomain,
+        shared.contentToken,
+      ));
+      const submitted = context.req.query(shareCodeQueryParameter);
+      if (submitted !== undefined) {
+        location.searchParams.set(shareCodeQueryParameter, submitted);
+      }
+      return new Response(null, {
+        headers: {
+          "Cache-Control": "no-store",
+          Location: location.toString(),
+          "Referrer-Policy": "no-referrer",
+        },
+        status: 302,
+      });
+    }
     const current = await runHttpApplicationEffect(
       context,
       dependencies,
@@ -2836,6 +2964,42 @@ function requireShortNames(
     });
   }
   return dependencies.shortNames;
+}
+
+function requireShareCodes(
+  dependencies: HttpAppDependencies,
+): ArtifactShareCodeStore {
+  if (dependencies.shareCodes === undefined) {
+    throw new CapabilityUnavailable({
+      message: "Share codes are not enabled on this installation.",
+    });
+  }
+  return dependencies.shareCodes;
+}
+
+/**
+ * The link a share code is used with: the short-name host when the artifact
+ * has one, because it keeps working across versions, otherwise the stable
+ * artifact link.
+ */
+async function shareCodeResponse(
+  context: Context<HttpEnvironment>,
+  dependencies: HttpAppDependencies,
+  artifactId: string,
+  shareCode: string | null,
+): Promise<{
+  readonly shareCode: string | null;
+  readonly url: string | null;
+  readonly urlWithCode: string | null;
+}> {
+  if (shareCode === null) return {shareCode: null, url: null, urlWithCode: null};
+  const shortName = await dependencies.shortNames?.findForArtifact(artifactId) ?? null;
+  const url = shortName === null
+    ? artifactBrowserUrl(responseApplicationUrl(context, dependencies), artifactId)
+    : shortNameBrowserUrl(context, dependencies, shortName);
+  const withCode = new URL(url);
+  withCode.searchParams.set(shareCodeQueryParameter, shareCode);
+  return {shareCode, url, urlWithCode: withCode.toString()};
 }
 
 function shortNameBrowserUrl(
@@ -4131,6 +4295,7 @@ async function serveShortNameHost(
   context: Context<HttpEnvironment>,
   requestUrl: URL,
   dependencies: HttpAppDependencies,
+  shareCodeAttempts: ShareCodeAttemptLimiter,
 ): Promise<Response | null> {
   const method = context.req.method;
   if (
@@ -4162,6 +4327,19 @@ async function serveShortNameHost(
     target.artifactId,
     target.currentVersionId,
   );
+  const shared = await dependencies.shareCodes?.resolveArtifact(target.artifactId) ?? null;
+  if (shared !== null) {
+    const sharedResponse = await serveShareCodeContent(
+      context,
+      requestUrl,
+      shared.contentToken,
+      shared,
+      location,
+      dependencies,
+      shareCodeAttempts,
+    );
+    if (sharedResponse !== null) return sharedResponse;
+  }
   return new Response(null, {
     headers: {
       "Cache-Control": "no-store",
@@ -4169,6 +4347,180 @@ async function serveShortNameHost(
       "Referrer-Policy": "no-referrer",
     },
     status: 302,
+  });
+}
+
+const shareGrantCookieName = "__Host-artifact_share";
+const loopbackShareGrantCookieName = "artifact_share";
+
+/**
+ * Serve a private artifact's current version to someone holding its share
+ * code. Handles a submitted `share_code` (sets the grant cookie and redirects
+ * to the clean address), a valid grant cookie (serves the file), and a page
+ * navigation without either (asks for the code). Returns null to let the
+ * normal private handling answer: no share code, a signed-in member's
+ * content session, or a subresource request without a grant.
+ */
+async function serveShareCodeContent(
+  context: Context<HttpEnvironment>,
+  requestUrl: URL,
+  contentToken: string,
+  knownTarget: ShareCodeTarget | null,
+  signInUrl: string | null,
+  dependencies: HttpAppDependencies,
+  shareCodeAttempts: ShareCodeAttemptLimiter,
+): Promise<Response | null> {
+  const method = context.req.method;
+  if (
+    dependencies.shareCodes === undefined
+    || (method !== "GET" && method !== "HEAD")
+  ) return null;
+  const target = knownTarget
+    ?? await dependencies.shareCodes.resolveContentToken(contentToken);
+  if (target === null) return null;
+  const hostname = requestUrl.hostname.toLowerCase();
+  const nowMilliseconds = Date.now();
+  const nowSeconds = Math.floor(nowMilliseconds / 1_000);
+
+  const submitted = requestUrl.searchParams.get(shareCodeQueryParameter);
+  if (submitted !== null) {
+    const client = shareCodeClient(context);
+    if (shareCodeAttempts.blocked(target.artifactId, client, nowMilliseconds)) {
+      return shareCodePage(429, "Too many wrong codes. Try again in 15 minutes.", signInUrl);
+    }
+    if (!shareCodeMatches(submitted, target.code)) {
+      shareCodeAttempts.recordFailure(target.artifactId, client, nowMilliseconds);
+      return shareCodePage(401, "That code is not right. Check it and try again.", signInUrl);
+    }
+    const grant = await issueShareGrant(target, hostname, nowSeconds);
+    const destination = new URL(requestUrl);
+    destination.searchParams.delete(shareCodeQueryParameter);
+    return new Response(null, {
+      headers: {
+        "Cache-Control": "no-store",
+        Location: `${destination.pathname}${destination.search}`,
+        "Referrer-Policy": "no-referrer",
+        "Set-Cookie": shareGrantCookie(grant.value, usesSecureContentCookie(requestUrl)),
+      },
+      status: 303,
+    });
+  }
+
+  const cookieHeader = context.req.header("cookie");
+  const grant = shareGrantValue(cookieHeader);
+  if (grant !== null && await verifyShareGrant(target, hostname, grant, nowSeconds)) {
+    const requestedPath = manifestPathFromUrl(requestUrl.pathname);
+    if (requestedPath === null) return versionNotFoundResponse();
+    const content = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      ContentAccessService.use((contentAccess) =>
+        contentAccess.authorizeSharedContent({
+          artifactId: target.artifactId,
+          contentToken: target.contentToken,
+          fallback: permitsSpaEntryFallback(context.req.raw.headers)
+            ? "entry"
+            : "none",
+          path: requestedPath,
+        })
+      ),
+    );
+    if (content === null) return versionNotFoundResponse();
+    return serveStoredVersionContent(context, content, false, false, dependencies);
+  }
+  if (contentSessionToken(cookieHeader) !== null) return null;
+  if (!permitsSpaEntryFallback(context.req.raw.headers)) return null;
+  return shareCodePage(401, null, signInUrl);
+}
+
+/**
+ * The client a wrong guess is counted against. The proxy appends the address
+ * it saw, so the last X-Forwarded-For entry is the one a client cannot forge.
+ */
+function shareCodeClient(context: Context<HttpEnvironment>): string {
+  const forwarded = context.req.header("x-forwarded-for");
+  return forwarded?.split(",").at(-1)?.trim() || "direct";
+}
+
+function shareGrantCookie(value: string, secure: boolean): string {
+  const name = secure ? shareGrantCookieName : loopbackShareGrantCookieName;
+  const secureAttribute = secure ? "; Secure" : "";
+  // Lax, not Strict: the link usually arrives from another site (chat, mail),
+  // and the redirect after a code entry must carry the cookie.
+  return `${name}=${value}; Path=/; Max-Age=${shareGrantLifetimeSeconds}; HttpOnly${secureAttribute}; SameSite=Lax`;
+}
+
+function shareGrantValue(cookieHeader: string | undefined): string | null {
+  if (cookieHeader === undefined) return null;
+  for (const pair of cookieHeader.split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0) continue;
+    const name = pair.slice(0, separator).trim();
+    if (name === shareGrantCookieName || name === loopbackShareGrantCookieName) {
+      return pair.slice(separator + 1).trim();
+    }
+  }
+  return null;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/gu, (character) => `&#${character.charCodeAt(0)};`);
+}
+
+function shareCodePage(
+  status: 401 | 429,
+  error: string | null,
+  signInUrl: string | null,
+): Response {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Enter share code</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f5f2; --card: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #d9d6cf; --accent: #2f5d50; --error: #a3322a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --card: #1f1f1d; --text: #ecebe7; --muted: #a29f98; --line: #3a3935; --accent: #8cc4b0; --error: #f08a80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 28px 24px; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p { margin: 0 0 20px; color: var(--muted); font-size: 0.9375rem; }
+  label { display: block; font-size: 0.875rem; font-weight: 600; margin-bottom: 6px; }
+  input { width: 100%; padding: 10px 12px; font: 600 1.125rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { width: 100%; margin-top: 14px; padding: 10px 12px; font: 600 1rem/1.2 inherit; color: var(--card); background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+  .error { color: var(--error); margin: 12px 0 0; font-size: 0.875rem; }
+  .member { margin: 20px 0 0; font-size: 0.875rem; }
+  .member a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Enter share code</h1>
+  <p>This page is private. Enter the code you were given to open it.</p>
+  <form method="get">
+    <label for="share-code">Share code</label>
+    <input id="share-code" name="${shareCodeQueryParameter}" autocomplete="off" autocapitalize="characters" spellcheck="false" required autofocus maxlength="64">
+    <button type="submit">Open</button>
+  </form>
+  ${error === null ? "" : `<p class="error" role="alert">${escapeHtml(error)}</p>`}
+  ${signInUrl === null ? "" : `<p class="member">Have an account? <a href="${escapeHtml(signInUrl)}">Sign in instead</a></p>`}
+</main>
+</body>
+</html>`;
+  return new Response(html, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "Content-Type": "text/html; charset=utf-8",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Robots-Tag": "noindex, nofollow",
+    },
+    status,
   });
 }
 

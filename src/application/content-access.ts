@@ -151,6 +151,18 @@ export interface AuthorizeVersionContentCommand {
   readonly sessionToken: Redacted.Redacted | null;
 }
 
+/**
+ * Input for one file read already granted by an artifact share code. The
+ * caller has verified the grant; this only checks the content still belongs
+ * to that artifact's current version.
+ */
+export interface AuthorizeSharedContentCommand {
+  readonly artifactId: string;
+  readonly contentToken: string;
+  readonly fallback: VersionContentFallback;
+  readonly path: string;
+}
+
 /** Input for issuing one embedded Review lease for an exact saved version. */
 export interface IssuePreviewLeaseCommand {
   readonly artifactId: string;
@@ -179,6 +191,9 @@ export type ContentAccessFailure =
 interface ContentAccessOperations {
   readonly authorizePreviewContent: (
     command: AuthorizePreviewContentCommand,
+  ) => Effect.Effect<VersionContent | null, ContentAccessFailure>;
+  readonly authorizeSharedContent: (
+    command: AuthorizeSharedContentCommand,
   ) => Effect.Effect<VersionContent | null, ContentAccessFailure>;
   readonly authorizeVersionContent: (
     command: AuthorizeVersionContentCommand,
@@ -382,6 +397,24 @@ function makeContentAccessService(
     return session === null ? yield* sessionRequired() : content;
   });
 
+  const authorizeSharedContent = Effect.fn(
+    "ContentAccessService.authorizeSharedContent",
+  )(function*(command: AuthorizeSharedContentCommand) {
+    const content = yield* dependencies.repository.findVersionContent(
+      command.contentToken,
+      command.path,
+      command.fallback,
+    );
+    if (content === null) return null;
+    if (
+      content.artifactId !== command.artifactId
+      || !content.isCurrent
+      || content.accessSetting !== accessSettings.accountRequired
+    ) return yield* sessionRequired();
+    yield* Effect.annotateCurrentSpan({"artifact.project.id": content.projectId});
+    return content;
+  });
+
   const authorizePreviewContent = Effect.fn(
     "ContentAccessService.authorizePreviewContent",
   )(function*(command: AuthorizePreviewContentCommand) {
@@ -426,6 +459,7 @@ function makeContentAccessService(
 
   return ContentAccessService.of({
     authorizePreviewContent,
+    authorizeSharedContent,
     authorizeVersionContent,
     exchangeContentBootstrap,
     issueContentBootstrap,

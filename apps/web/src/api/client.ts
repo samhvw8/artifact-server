@@ -378,6 +378,13 @@ const shortNameAvailabilitySchema = z.object({
 });
 export type ShortNameAvailability = z.infer<typeof shortNameAvailabilitySchema>;
 
+const shareCodeSchema = z.object({
+  shareCode: z.string().nullable(),
+  url: z.url().nullable(),
+  urlWithCode: z.url().nullable(),
+});
+export type ArtifactShareCode = z.infer<typeof shareCodeSchema>;
+
 const artifactDetailsSchema: z.ZodType<ArtifactDetails> = z.object({
   artifact: artifactSchema,
   current: artifactVersionSchema,
@@ -1059,6 +1066,24 @@ export const api = {
     `/api/v1/artifacts/${encodeURIComponent(artifactId)}/short-name?${projectQuery(projectId)}`,
     {
       body: JSON.stringify({shortName}),
+      headers: mutationHeaders(),
+      method: "PUT",
+    },
+  ),
+  shareCode: (projectId: string, artifactId: string) => request(
+    shareCodeSchema,
+    `/api/v1/artifacts/${encodeURIComponent(artifactId)}/share-code?${projectQuery(projectId)}`,
+  ),
+  generateShareCode: (projectId: string, artifactId: string) => request(
+    shareCodeSchema,
+    `/api/v1/artifacts/${encodeURIComponent(artifactId)}/share-code?${projectQuery(projectId)}`,
+    {headers: mutationHeaders(), method: "POST"},
+  ),
+  setShareCode: (projectId: string, artifactId: string, shareCode: string | null) => request(
+    shareCodeSchema,
+    `/api/v1/artifacts/${encodeURIComponent(artifactId)}/share-code?${projectQuery(projectId)}`,
+    {
+      body: JSON.stringify({shareCode}),
       headers: mutationHeaders(),
       method: "PUT",
     },

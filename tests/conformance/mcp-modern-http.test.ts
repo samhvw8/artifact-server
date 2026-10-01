@@ -219,6 +219,7 @@ describe("modern MCP HTTP", () => {
       "dispatch_inbox",
       "artifact_set_short_name",
       "artifact_short_names",
+      "artifact_share_code",
     ]);
     expect(tools.some((tool) => tool.name.includes("inline"))).toBe(false);
     expect(tools.find((tool) => tool.name === "artifact_delete")?.annotations)
@@ -677,6 +678,21 @@ describe("modern MCP HTTP", () => {
       expect.objectContaining({artifactId: committed.artifact.id, shortName: "mcp-proof"}),
     );
 
+    const shareCodeResultSchema = z.object({
+      shareCode: z.string().nullable(),
+      status: z.string(),
+      urlWithCode: z.string().nullable(),
+    });
+    const generatedCode = shareCodeResultSchema.parse(
+      (await callTool(server, installation.apiToken, {
+        arguments: {action: "generate", artifactId: committed.artifact.id},
+        name: "artifact_share_code",
+      })).structuredContent,
+    );
+    expect(generatedCode.status).toBe("set");
+    expect(generatedCode.shareCode).toMatch(/^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/u);
+    expect(generatedCode.urlWithCode).toContain("mcp-proof.");
+
     const staleVisibility = await callTool(server, installation.apiToken, {
       arguments: {
         accessSetting: "public_link",
@@ -701,6 +717,13 @@ describe("modern MCP HTTP", () => {
       })).structuredContent,
     );
     expect(visible.artifact.currentVersionId).toBe(updated.version.id);
+    const codeAfterPublic = shareCodeResultSchema.parse(
+      (await callTool(server, installation.apiToken, {
+        arguments: {action: "get", artifactId: committed.artifact.id},
+        name: "artifact_share_code",
+      })).structuredContent,
+    );
+    expect(codeAfterPublic.shareCode).toBeNull();
 
     const restored = publicationResultSchema.parse(
       (await callTool(server, installation.apiToken, {

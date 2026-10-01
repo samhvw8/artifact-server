@@ -5,7 +5,7 @@ description: What this fork changes in plannotator/artifact-server, where it run
 resource: https://github.com/samhvw8/artifact-server/tree/3cxo
 tags: [getting-started, fork]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-01T07:10:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-01T09:45:00Z' }
 sources:
   - id: upstream
     resource: https://github.com/plannotator/artifact-server
@@ -32,6 +32,7 @@ merge cleanly.
 |--------|---------|
 | Published pages may share the app's own domain (`*.art.3cxo.work` next to `artifacts.3cxo.work`), opt-in | [/features/same-site-content.md](/features/same-site-content.md) |
 | Artifact short names: `<name>.art.3cxo.work` | [/features/short-names.md](/features/short-names.md) |
+| Share codes: open a private artifact with a code, no account | [/features/share-codes.md](/features/share-codes.md) |
 | One-command build and rollout to 3cxo | [/playbooks/deploy-to-3cxo.md](/playbooks/deploy-to-3cxo.md) |
 
 # Where it runs

@@ -72,6 +72,7 @@ import {
 import {SqliteGitHistoryProviderIdentityStore} from
   "../storage/sqlite-git-history-provider-identity-store.js";
 import {SqliteArtifactShortNameStore} from "../storage/sqlite-artifact-short-name-store.js";
+import {SqliteArtifactShareCodeStore} from "../storage/sqlite-artifact-share-code-store.js";
 import {
   type GitHistoryProvider,
   startGitHistoryMirrorWorker,
@@ -179,6 +180,16 @@ export async function createLocalRuntime(
     repository.close();
     throw cause;
   }
+  let shareCodes: SqliteArtifactShareCodeStore;
+  try {
+    shareCodes = new SqliteArtifactShareCodeStore(databasePath);
+  } catch (cause) {
+    shortNames.close();
+    gitHistoryIdentityStore?.close();
+    identityRepository.close();
+    repository.close();
+    throw cause;
+  }
   const linkedFilesEnabled = config.linkedFiles === "on";
   const selfProtectedPaths = {
     databasePath,
@@ -213,9 +224,11 @@ export async function createLocalRuntime(
         gitHistoryIdentityStore,
         identityRepository,
         repository,
+        shareCodes,
         shortNames,
       }),
       (owned) => Effect.sync(() => {
+        owned.shareCodes.close();
         owned.shortNames.close();
         owned.gitHistoryIdentityStore?.close();
         owned.identityRepository.close();
@@ -308,6 +321,7 @@ export async function createLocalRuntime(
       gitHistory: gitHistoryMonitor?.reader ??
         fixedGitHistoryCapabilityReader(gitHistory.capability),
       linkedArtifacts: linkedFilesEnabled,
+      shareCodes,
       shortNames,
       trustedApplicationOrigin: config.applicationOrigin ?? null,
       webAssets: createNodeWebAssetStore(config.webAssetsRoot),

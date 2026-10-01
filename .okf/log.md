@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-10-01
+* **Creation**: [Artifact share codes](/features/share-codes.md) — private artifacts opened without an account by code.
+* **Update**: [Artifact short names](/features/short-names.md) and [Getting started](/getting-started.md) link the new feature.
 * **Creation**: bundle for the 3cxo fork — [Getting started](/getting-started.md).
 * **Creation**: features — [Same-site published content](/features/same-site-content.md), [Artifact short names](/features/short-names.md).
 * **Creation**: live installation — [Artifact Server on 3cxo](/deployment/3cxo-host.md).

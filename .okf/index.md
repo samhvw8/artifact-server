@@ -10,6 +10,7 @@ okf_version: '0.2'
 
 * [Same-site published content](features/same-site-content.md) - opt-in flag that lets pages share the app's registrable domain.
 * [Artifact short names](features/short-names.md) - `<name>.<content domain>` serving or redirecting to an artifact's current version.
+* [Artifact share codes](features/share-codes.md) - a code that opens a private artifact's current version without an account.
 
 # Deployment
 

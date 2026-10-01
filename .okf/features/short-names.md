@@ -5,7 +5,7 @@ description: A unique human-chosen label per artifact so <name>.<content domain>
 resource: src/application/artifact-short-names.ts
 tags: [short-names, http, mcp, ui, fork-change]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-01T07:10:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-01T09:45:00Z' }
 sources:
   - id: app
     resource: src/application/artifact-short-names.ts
@@ -38,6 +38,7 @@ memorable host per artifact, for example
 |-----------------|-------------------------------------|
 | `public_link` | Serves the current version in place; the address keeps the name |
 | `account_required` | 302 to the review page of the current version on the app origin |
+| `account_required` with a [share code](/features/share-codes.md) | Asks for the code, then serves in place |
 
 Why the two behave differently: [/decisions/short-name-serving.md](/decisions/short-name-serving.md).
 

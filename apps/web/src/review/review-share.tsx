@@ -5,6 +5,8 @@ import {
   Copy01Icon,
   File01Icon,
   Globe02Icon,
+  Key01Icon,
+  RefreshIcon,
   SecurityLockIcon,
   Share01Icon,
   Tick02Icon,
@@ -17,6 +19,7 @@ import {
   api,
   type AccessSetting,
   type ArtifactDetails,
+  type ArtifactShareCode,
   type ArtifactVersion,
 } from "@/api/client";
 import claudeLogoUrl from "./assets/agents/claude.svg";
@@ -32,9 +35,13 @@ import piLogoUrl from "./assets/agents/pi.svg";
 import piLightLogoUrl from "./assets/agents/pi-light.svg";
 
 type ShareScreen = "access" | "agents" | "overview";
+/** Who can open the artifact: its access setting, or private plus a share code. */
+type ShareMode = AccessSetting | "share_code";
 type CopiedTarget =
   | "agent-prompt"
+  | "code-link"
   | "latest-link"
+  | "share-code"
   | "local-command"
   | "mcp-address"
   | "raw-link"
@@ -60,9 +67,12 @@ export function ReviewShareControl({
 }: ReviewShareControlProps) {
   const [open, setOpen] = useState(false);
   const [screen, setScreen] = useState<ShareScreen>("overview");
-  const [selectedAccess, setSelectedAccess] = useState<AccessSetting>(
+  const [selectedMode, setSelectedMode] = useState<ShareMode>(
     details?.artifact.accessSetting ?? "account_required",
   );
+  // null: share codes are unavailable here (capability off, or not a manager).
+  const [shareCode, setShareCode] = useState<ArtifactShareCode | null>(null);
+  const [customCode, setCustomCode] = useState("");
   const [pending, setPending] = useState(false);
   const [copiedTarget, setCopiedTarget] = useState<CopiedTarget | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -72,6 +82,32 @@ export function ReviewShareControl({
   useEffect(() => () => {
     if (copiedResetTimer.current !== null) clearTimeout(copiedResetTimer.current);
   }, []);
+
+  const projectId = details?.artifact.projectId ?? null;
+  const artifactId = details?.artifact.id ?? null;
+  const accessSetting = details?.artifact.accessSetting ?? null;
+  useEffect(() => {
+    if (!open || projectId === null || artifactId === null) return undefined;
+    let cancelled = false;
+    const load = async (): Promise<void> => {
+      let loaded: ArtifactShareCode | null = null;
+      try {
+        loaded = await api.shareCode(projectId, artifactId);
+      } catch {
+        loaded = null;
+      }
+      if (!cancelled) setShareCode(loaded);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectId, artifactId, accessSetting]);
+
+  const activeCode = shareCode?.shareCode ?? null;
+  const currentMode: ShareMode = accessSetting === "account_required" && activeCode !== null
+    ? "share_code"
+    : accessSetting ?? "account_required";
 
   const updateOpen = (next: boolean): void => {
     if (pending && !next) return;
@@ -132,7 +168,8 @@ export function ReviewShareControl({
 
   const openAccess = (): void => {
     if (details === null) return;
-    setSelectedAccess(details.artifact.accessSetting);
+    setSelectedMode(currentMode);
+    setCustomCode("");
     setFailure(null);
     setNotice(null);
     setScreen("access");
@@ -140,7 +177,8 @@ export function ReviewShareControl({
 
   const saveAccess = async (): Promise<void> => {
     if (details === null) return;
-    if (selectedAccess === details.artifact.accessSetting) {
+    const trimmedCode = customCode.trim();
+    if (selectedMode === currentMode && (selectedMode !== "share_code" || trimmedCode === "")) {
       setScreen("overview");
       return;
     }
@@ -148,19 +186,41 @@ export function ReviewShareControl({
     setFailure(null);
     setNotice(null);
     try {
-      const changed = await api.changeAccess(
-        details.artifact.projectId,
-        details.artifact.id,
-        details.artifact.currentVersionId,
-        selectedAccess,
-        crypto.randomUUID(),
-      );
-      onArtifactChanged(changed.artifact);
+      const {projectId: project, id} = details.artifact;
+      const access: AccessSetting = selectedMode === "public_link"
+        ? "public_link"
+        : "account_required";
+      let warning: string | null = null;
+      if (access !== details.artifact.accessSetting) {
+        const changed = await api.changeAccess(
+          project,
+          id,
+          details.artifact.currentVersionId,
+          access,
+          crypto.randomUUID(),
+        );
+        onArtifactChanged(changed.artifact);
+        warning = changed.warning;
+      }
+      if (selectedMode === "share_code") {
+        setShareCode(
+          trimmedCode !== ""
+            ? await api.setShareCode(project, id, trimmedCode)
+            : activeCode === null
+              ? await api.generateShareCode(project, id)
+              : shareCode,
+        );
+      } else if (selectedMode === "account_required" && activeCode !== null) {
+        setShareCode(await api.setShareCode(project, id, null));
+      }
+      setCustomCode("");
       setNotice(
-        changed.warning ?? (
-          selectedAccess === "public_link"
+        warning ?? (
+          selectedMode === "public_link"
             ? "The current version can now be opened without signing in."
-            : "This artifact now requires an admitted account."
+            : selectedMode === "share_code"
+              ? "People with the code can now open the current version without signing in."
+              : "This artifact now requires an admitted account."
         ),
       );
       setScreen("overview");
@@ -173,7 +233,27 @@ export function ReviewShareControl({
     }
   };
 
-  const publicArtifact = details?.artifact.accessSetting === "public_link";
+  const regenerateShareCode = async (): Promise<void> => {
+    if (details === null) return;
+    setPending(true);
+    setFailure(null);
+    setNotice(null);
+    try {
+      setShareCode(
+        await api.generateShareCode(details.artifact.projectId, details.artifact.id),
+      );
+      setNotice("New code ready. The old code no longer works.");
+    } catch (caught) {
+      setFailure(
+        caught instanceof Error ? caught.message : "A new share code could not be made.",
+      );
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const publicArtifact = currentMode === "public_link";
+  const codeArtifact = currentMode === "share_code";
   const serverOrigin = details === null ? "" : new URL(details.links.artifact).origin;
   const mcpAddress = `${serverOrigin}/mcp`;
 
@@ -267,12 +347,13 @@ export function ReviewShareControl({
                 <div className="as-share-access-summary">
                   <HugeiconsIcon
                     aria-hidden="true"
-                    icon={publicArtifact ? Globe02Icon : SecurityLockIcon}
+                    icon={publicArtifact ? Globe02Icon : codeArtifact ? Key01Icon : SecurityLockIcon}
                     strokeWidth={1.8}
                   />
                   <p>
                     People with access to this Artifact Server can review this exact version.
                     {publicArtifact ? " The latest raw artifact is public." : ""}
+                    {codeArtifact ? " People with the share code can open the latest version without signing in." : ""}
                   </p>
                   <button
                     className="as-button"
@@ -286,6 +367,32 @@ export function ReviewShareControl({
 
                 <section aria-labelledby="as-share-secondary-heading" className="as-share-secondary">
                   <h3 id="as-share-secondary-heading">Other links</h3>
+                  {codeArtifact && shareCode !== null ? (
+                    <>
+                      <ShareSecondaryLink
+                        copied={copiedTarget === "share-code"}
+                        description="Send it separately from the link"
+                        label="Share code"
+                        onCopy={() => void copyText(
+                          shareCode.shareCode ?? "",
+                          "share-code",
+                          "The share code could not be copied.",
+                        )}
+                        value={shareCode.shareCode ?? ""}
+                      />
+                      <ShareSecondaryLink
+                        copied={copiedTarget === "code-link"}
+                        description="Opens without typing the code"
+                        label="Link with code"
+                        onCopy={() => void copyText(
+                          shareCode.urlWithCode ?? "",
+                          "code-link",
+                          "The link with code could not be copied.",
+                        )}
+                        value={shareCode.urlWithCode ?? ""}
+                      />
+                    </>
+                  ) : null}
                   <ShareSecondaryLink
                     copied={copiedTarget === "latest-link"}
                     description="Moves when a new version is published"
@@ -418,30 +525,78 @@ export function ReviewShareControl({
                 <fieldset>
                   <legend className="as-visually-hidden">Who can open this artifact</legend>
                   <ShareAccessOption
-                    checked={selectedAccess === "account_required"}
+                    checked={selectedMode === "account_required"}
                     description="An admitted installation account is required."
                     disabled={pending}
                     label="Private"
-                    onChange={() => setSelectedAccess("account_required")}
+                    onChange={() => setSelectedMode("account_required")}
                     value="account_required"
                   />
+                  {shareCode === null ? null : (
+                    <ShareAccessOption
+                      checked={selectedMode === "share_code"}
+                      description="Private, but anyone with the link and the code can open the current version without signing in."
+                      disabled={pending}
+                      label="Share code"
+                      onChange={() => setSelectedMode("share_code")}
+                      value="share_code"
+                    />
+                  )}
                   <ShareAccessOption
-                    checked={selectedAccess === "public_link"}
+                    checked={selectedMode === "public_link"}
                     description="No sign-in. Anyone who can reach this server and has the link can open the current version."
                     disabled={pending}
                     label="Public link"
-                    onChange={() => setSelectedAccess("public_link")}
+                    onChange={() => setSelectedMode("public_link")}
                     value="public_link"
                   />
                 </fieldset>
+                {selectedMode === "share_code" ? (
+                  <div className="as-share-code-editor">
+                    {currentMode === "share_code" && activeCode !== null ? (
+                      <div className="as-share-code-editor__current">
+                        <code>{activeCode}</code>
+                        <button
+                          className="as-button"
+                          disabled={pending}
+                          onClick={() => void regenerateShareCode()}
+                          type="button"
+                        >
+                          <HugeiconsIcon aria-hidden="true" icon={RefreshIcon} strokeWidth={1.8} />
+                          New code
+                        </button>
+                      </div>
+                    ) : null}
+                    <label>
+                      <span>
+                        {currentMode === "share_code"
+                          ? "Or set your own code"
+                          : "Your own code (leave empty to generate one)"}
+                      </span>
+                      <input
+                        autoComplete="off"
+                        disabled={pending}
+                        maxLength={64}
+                        onChange={(event) => setCustomCode(event.target.value)}
+                        placeholder="At least 6 letters or digits"
+                        spellCheck={false}
+                        type="text"
+                        value={customCode}
+                      />
+                    </label>
+                    <small>Changing the code locks out everyone who used the old one.</small>
+                  </div>
+                ) : null}
                 <p className="as-share-network-note">
                   Public access does not create a tunnel, open a firewall, or make an unreachable server reachable.
                 </p>
-                {selectedAccess !== details?.artifact.accessSetting ? (
+                {selectedMode !== currentMode ? (
                   <p className="as-share-access-warning">
-                    {selectedAccess === "public_link"
+                    {selectedMode === "public_link"
                       ? "The link can be redistributed. Earlier versions and history stay account-required."
-                      : "Downloaded or externally cached copies cannot be recalled."}
+                      : selectedMode === "share_code"
+                        ? "The code and link can be passed on. Earlier versions and history stay account-required."
+                        : "Downloaded or externally cached copies cannot be recalled."}
                   </p>
                 ) : null}
                 {failure === null ? null : (
@@ -461,7 +616,10 @@ export function ReviewShareControl({
                     disabled={
                       details === null
                       || pending
-                      || selectedAccess === details.artifact.accessSetting
+                      || (
+                        selectedMode === currentMode
+                        && (selectedMode !== "share_code" || customCode.trim() === "")
+                      )
                     }
                     onClick={() => void saveAccess()}
                     type="button"
@@ -664,7 +822,7 @@ function ShareAccessOption({
   readonly disabled: boolean;
   readonly label: string;
   readonly onChange: () => void;
-  readonly value: AccessSetting;
+  readonly value: ShareMode;
 }) {
   return (
     <label className="as-share-access-option" data-checked={checked}>

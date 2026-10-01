@@ -14,6 +14,13 @@ import {type Effect, Redacted} from "effect";
 import {z} from "zod";
 
 import {
+  type ArtifactShareCodeStore,
+  getArtifactShareCode,
+  setArtifactShareCode,
+  type ShareCodeChangeRequest,
+  shareCodeQueryParameter,
+} from "../application/artifact-share-codes.js";
+import {
   type ArtifactShortNameStore,
   checkShortName,
   listArtifactShortNames,
@@ -390,6 +397,8 @@ export interface ArtifactMcpServerDependencies {
   readonly linkedArtifacts?: boolean;
   readonly mode: "local" | "remote";
   readonly requestId: string;
+  /** Share-code store; the share-code tool exists only when it is present. */
+  readonly shareCodes: ArtifactShareCodeStore | null;
   /** Short-name store; the short-name tools exist only when it is present. */
   readonly shortNames: ArtifactShortNameStore | null;
 }
@@ -2406,6 +2415,85 @@ export function createArtifactMcpServer(
             url: shortNameUrl(entry.shortName),
           })),
         };
+      }),
+    );
+  }
+
+  const shareCodes = dependencies.shareCodes;
+  if (shareCodes !== null) {
+    registerNudgedTool(
+      "artifact_share_code",
+      {
+        title: "Manage an artifact share code",
+        description:
+          `Let people without an account open a private artifact's current version with a code. action "generate" creates a random code, "set" uses shareCode (6-32 letters or digits, case and hyphens ignored), "clear" removes it, "get" reads it. Changing or clearing the code locks out everyone who used the old one. Only private (account_required) artifacts take a code; making an artifact public removes it. Share url and the code separately, or urlWithCode, which opens without typing.`,
+        inputSchema: z.object({
+          action: z.enum(["clear", "generate", "get", "set"]),
+          artifactId: artifactIdSchema,
+          projectId: optionalProjectIdSchema,
+          shareCode: z.string().max(200).nullable().default(null),
+        }).strict(),
+        outputSchema: z.object({
+          message: z.string().optional(),
+          shareCode: z.string().nullable(),
+          status: z.enum(["cleared", "current", "invalid", "requires_private", "set"]),
+          url: z.string().nullable(),
+          urlWithCode: z.string().nullable(),
+        }).strict(),
+        annotations: idempotentWriteAnnotations,
+      },
+      async ({action, artifactId, projectId, shareCode}) => toolResult(async () => {
+        const command = {artifactId, principal: identity.principal, projectId};
+        const links = async (code: string | null) => {
+          if (code === null) return {url: null, urlWithCode: null};
+          const shortName = await dependencies.shortNames?.findForArtifact(artifactId) ?? null;
+          const url = shortName === null
+            ? artifactBrowserUrl(applicationUrl, artifactId)
+            : versionBrowserUrl(applicationUrl, dependencies.contentDomain, shortName);
+          const withCode = new URL(url);
+          withCode.searchParams.set(shareCodeQueryParameter, code);
+          return {url, urlWithCode: withCode.toString()};
+        };
+        if (action === "get") {
+          const current = await runMcpApplicationEffect(
+            dependencies,
+            getArtifactShareCode(shareCodes, command),
+          );
+          return {shareCode: current, status: "current" as const, ...await links(current)};
+        }
+        const request: ShareCodeChangeRequest | null = action === "set"
+          ? shareCode === null ? null : {kind: "set", shareCode}
+          : {kind: action};
+        if (request === null) {
+          return {
+            message: "Pass shareCode with action \"set\", or use \"generate\".",
+            shareCode: null,
+            status: "invalid" as const,
+            url: null,
+            urlWithCode: null,
+          };
+        }
+        const change = await runMcpApplicationEffect(
+          dependencies,
+          setArtifactShareCode(shareCodes, {
+            ...command,
+            request,
+          }),
+        );
+        switch (change.status) {
+          case "set":
+            return {shareCode: change.shareCode, status: change.status, ...await links(change.shareCode)};
+          case "cleared":
+            return {shareCode: null, status: change.status, url: null, urlWithCode: null};
+          default:
+            return {
+              message: change.message,
+              shareCode: null,
+              status: change.status,
+              url: null,
+              urlWithCode: null,
+            };
+        }
       }),
     );
   }
