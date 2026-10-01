@@ -16,6 +16,7 @@ const accessSettingSchema = z.enum([
 const targetRowSchema = z.object({
   accessSetting: accessSettingSchema,
   artifactId: z.string(),
+  contentToken: z.string(),
   currentVersionId: z.string(),
   projectId: z.string(),
 });
@@ -163,11 +164,12 @@ export class SqliteArtifactShortNameStore implements ArtifactShortNameStore {
           .prepare(
             `SELECT a.id AS artifactId, a.project_id AS projectId,
                a.access_setting AS accessSetting,
-               a.current_version_id AS currentVersionId
+               a.current_version_id AS currentVersionId,
+               v.content_token AS contentToken
              FROM artifact_short_names n
              JOIN artifacts a ON a.id = n.artifact_id
-             WHERE n.short_name = ? AND a.deleted_at IS NULL
-               AND a.current_version_id IS NOT NULL`,
+             JOIN versions v ON v.id = a.current_version_id
+             WHERE n.short_name = ? AND a.deleted_at IS NULL`,
           )
           .get(shortName) ?? null,
       )

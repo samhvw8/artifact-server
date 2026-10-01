@@ -10,9 +10,9 @@ import {ProjectManagementService} from "./project-management.js";
 
 /**
  * Artifact short names: one human-chosen content-host label per artifact
- * (`<name>.<content domain>`) that redirects to the artifact's current
- * version. A short name never serves content itself, so version origins,
- * content sessions, and their isolation stay exactly as they are.
+ * (`<name>.<content domain>`). A public-link artifact's current version is
+ * served on that host, so the address stays; a private artifact redirects to
+ * its review page, because content sessions are bound to version origins.
  */
 
 /** Longest short name. Version content tokens are 36 characters, so the two never overlap. */
@@ -32,6 +32,8 @@ const decodeShortName = Schema.decodeUnknownOption(shortNameSchema);
 export interface ShortNameTarget {
   readonly accessSetting: AccessSetting;
   readonly artifactId: string;
+  /** Content-host token of the current version. */
+  readonly contentToken: string;
   readonly currentVersionId: string;
   readonly projectId: string;
 }

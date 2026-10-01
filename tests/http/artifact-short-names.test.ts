@@ -9,7 +9,7 @@ import {
   startTestServer,
   type TestInstallation,
 } from "../support/runtime-harness.js";
-import {type PublishResponse, publishNew} from "../support/publishing.js";
+import {type PublishResponse, publishNew, publishVersion} from "../support/publishing.js";
 
 const applicationOrigin = "https://artifacts.example.test";
 const contentDomain = "art.example.test";
@@ -113,10 +113,11 @@ describe("artifact short names", () => {
 
     const publicAssigned = await setShortName(publicArtifact.artifact.id, "public-page");
     expect(publicAssigned.status).toBe(200);
-    const publicRedirect = await fetchVersion(server, "https://public-page.art.example.test/");
-    expect(publicRedirect.status).toBe(302);
-    expect(publicRedirect.headers.get("location"))
-      .toBe(`${applicationOrigin}/artifacts/${publicArtifact.artifact.id}`);
+    const publicPage = await fetchVersion(server, "https://public-page.art.example.test/");
+    expect(publicPage.status).toBe(200);
+    expect(publicPage.headers.get("location")).toBeNull();
+    expect(publicPage.headers.get("cache-control")).toBe("public, no-cache, must-revalidate");
+    expect(await publicPage.text()).toContain("<h1>Public</h1>");
 
     const listed = listSchema.parse(await (await api("/api/v1/short-names")).json());
     expect(listed.shortNames.map(({artifactId, shortName}) => ({artifactId, shortName})))
@@ -124,6 +125,24 @@ describe("artifact short names", () => {
         {artifactId: privateArtifact.artifact.id, shortName: "hello"},
         {artifactId: publicArtifact.artifact.id, shortName: "public-page"},
       ]);
+  });
+
+  test("a public short name keeps serving the newest version", async () => {
+    await setShortName(publicArtifact.artifact.id, "public-page");
+    await server.stop();
+    server = await startTestServer(installation);
+    const updated = await publishVersion(server, installation, {
+      artifactId: publicArtifact.artifact.id,
+      content: "<h1>Public v2</h1>",
+      expectedCurrentVersionId: publicArtifact.version.id,
+      idempotencyKey: "short-name-public-002",
+    });
+    expect(updated.response.status).toBe(201);
+    await server.stop();
+    server = await startTestServer(installation, {applicationOrigin, contentDomain});
+    const page = await fetchVersion(server, "https://public-page.art.example.test/");
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("<h1>Public v2</h1>");
   });
 
   test("invalid and reserved names are rejected with suggestions", async () => {

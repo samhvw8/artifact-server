@@ -706,8 +706,8 @@ export function createHttpApp(
 
   app.use("*", async (context, next) => {
     const requestUrl = new URL(context.req.url);
-    const shortNameResponse = await redirectShortNameHost(
-      context.req.method,
+    const shortNameResponse = await serveShortNameHost(
+      context,
       requestUrl,
       dependencies,
     );
@@ -4121,16 +4121,18 @@ function emptyByteStream(): ReadableStream<Uint8Array> {
 }
 
 /**
- * Redirect `<short name>.<content domain>` to the named artifact's current
- * version: the review page for private artifacts, the version origin for
- * public links. Never serves content, so version-origin isolation is
- * unchanged. Returns null for every host that is not an assigned short name.
+ * Answer `<short name>.<content domain>`. A public-link artifact's current
+ * version is served in place, without any session cookie, so the address
+ * keeps the name. A private artifact redirects to its review page, because
+ * content sessions belong to exact version origins. Returns null for every
+ * host that is not an assigned short name.
  */
-async function redirectShortNameHost(
-  method: string,
+async function serveShortNameHost(
+  context: Context<HttpEnvironment>,
   requestUrl: URL,
   dependencies: HttpAppDependencies,
 ): Promise<Response | null> {
+  const method = context.req.method;
   if (
     dependencies.shortNames === undefined ||
     dependencies.trustedApplicationOrigin === null ||
@@ -4145,15 +4147,21 @@ async function redirectShortNameHost(
   if (shortNameProblem(label) !== null) return null;
   const target = await dependencies.shortNames.resolve(label);
   if (target === null) return null;
-  const applicationUrl = new URL(dependencies.trustedApplicationOrigin);
-  const location = target.accessSetting === accessSettings.publicLink
-    ? artifactBrowserUrl(applicationUrl, target.artifactId)
-    : artifactReviewUrl(
-      applicationUrl,
-      target.projectId,
-      target.artifactId,
-      target.currentVersionId,
+  if (target.accessSetting === accessSettings.publicLink) {
+    return serveVersionContent(
+      context,
+      requestUrl,
+      target.contentToken,
+      undefined,
+      dependencies,
     );
+  }
+  const location = artifactReviewUrl(
+    new URL(dependencies.trustedApplicationOrigin),
+    target.projectId,
+    target.artifactId,
+    target.currentVersionId,
+  );
   return new Response(null, {
     headers: {
       "Cache-Control": "no-store",
