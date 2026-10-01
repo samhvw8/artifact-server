@@ -101,6 +101,8 @@ describe("artifact short names", () => {
     expect(reviewUrl.pathname).toBe("/review");
     expect(reviewUrl.searchParams.get("artifact")).toBe(privateArtifact.artifact.id);
     expect(reviewUrl.searchParams.get("version")).toBe(privateArtifact.version.id);
+    const posted = await fetchVersion(server, "https://hello.art.example.test/", "POST");
+    expect(posted.status).not.toBe(302);
 
     const taken = await setShortName(publicArtifact.artifact.id, "hello");
     expect(taken.status).toBe(409);

@@ -19,7 +19,7 @@ revision=$(git rev-parse --short HEAD)
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   revision="${revision}-dirty"
 fi
-tag="local/artifact-server:${revision}"
+tag="local/artifact-server:${revision}-$(date +%Y%m%d%H%M%S)"
 
 printf 'Shipping %s to %s\n' "$revision" "$host"
 git ls-files -z | tar --null -czf - -T - | ssh "$host" \

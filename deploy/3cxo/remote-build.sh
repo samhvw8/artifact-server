@@ -45,17 +45,30 @@ docker buildx build --load -f "$dockerfile" \
   -t "$tag" .
 
 cd "$compose_directory"
-set -a
-# shellcheck disable=SC1091
-. ./.env
-set +a
+if ! grep -q '^ARTIFACT_SERVER_IMAGE=' .env; then
+  echo "ARTIFACT_SERVER_IMAGE is missing from $compose_directory/.env." >&2
+  exit 1
+fi
 backup="/srv/backups/artifact-server/pre-deploy-$(date +%Y%m%d-%H%M%S)"
-./compact-backup.sh "$backup" </dev/null
+# Load .env only inside this subshell: an exported ARTIFACT_SERVER_IMAGE
+# would override .env for the docker compose call below.
+(
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+  ./compact-backup.sh "$backup" </dev/null
+)
 # Keep the five newest pre-deploy backups.
 find /srv/backups/artifact-server -maxdepth 1 -name 'pre-deploy-*' -type d \
   | sort | head -n -5 | xargs -r rm -rf
 
-cp -p .env ".env.bak-$(date +%Y%m%d-%H%M%S)"
+stamp=$(date +%Y%m%d-%H%M%S)
+cp -p .env ".env.bak-$stamp"
+cp -p compose.yaml "compose.yaml.bak-$stamp"
+install -m 0644 "$source_directory/packaging/compose/compose.yaml" compose.yaml
 sed -i "s|^ARTIFACT_SERVER_IMAGE=.*|ARTIFACT_SERVER_IMAGE=$tag|" .env
+printf 'Rollback: cp %s/.env.bak-%s .env && cp %s/compose.yaml.bak-%s compose.yaml && docker compose up -d\n' \
+  "$compose_directory" "$stamp" "$compose_directory" "$stamp"
 docker compose up -d --wait artifact-server </dev/null
 printf 'Running %s; backup at %s\n' "$tag" "$backup"

@@ -2317,6 +2317,7 @@ function ShortNameInspector({
       return undefined;
     }
     let active = true;
+    setAvailability(null);
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
@@ -2409,7 +2410,7 @@ function ShortNameInspector({
           <div className="as-tag-editor__actions">
             <button
               className="as-button as-button--primary"
-              disabled={pending || availability?.available === false}
+              disabled={pending || value.trim() === "" || availability?.available === false}
               type="submit"
             >
               {pending ? "Saving…" : "Save name"}

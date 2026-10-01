@@ -706,7 +706,11 @@ export function createHttpApp(
 
   app.use("*", async (context, next) => {
     const requestUrl = new URL(context.req.url);
-    const shortNameResponse = await redirectShortNameHost(requestUrl, dependencies);
+    const shortNameResponse = await redirectShortNameHost(
+      context.req.method,
+      requestUrl,
+      dependencies,
+    );
     if (shortNameResponse !== null) return shortNameResponse;
     const contentToken = tokenFromContentHost(
       requestUrl.hostname,
@@ -4123,12 +4127,14 @@ function emptyByteStream(): ReadableStream<Uint8Array> {
  * unchanged. Returns null for every host that is not an assigned short name.
  */
 async function redirectShortNameHost(
+  method: string,
   requestUrl: URL,
   dependencies: HttpAppDependencies,
 ): Promise<Response | null> {
   if (
     dependencies.shortNames === undefined ||
-    dependencies.trustedApplicationOrigin === null
+    dependencies.trustedApplicationOrigin === null ||
+    (method !== "GET" && method !== "HEAD")
   ) {
     return null;
   }
