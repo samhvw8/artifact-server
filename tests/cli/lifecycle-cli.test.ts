@@ -149,6 +149,42 @@ describe("Artifact Server lifecycle CLI", () => {
         hostname: "127.0.0.1",
         port: "8787",
       }))).rejects.toMatchObject({reason: "invalid_origin"});
+      const sameSiteContent = await Effect.runPromise(
+        parseCompactRuntimeConfiguration({
+          dataDirectory,
+          environment: {
+            ...environment,
+            ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT: "true",
+            ARTIFACT_SERVER_CONTENT_DOMAIN: "art.example.com",
+          },
+          hostname: "127.0.0.1",
+          port: "8787",
+        }),
+      );
+      expect(sameSiteContent.contentDomain).toBe("art.example.com");
+      await expect(Effect.runPromise(parseCompactRuntimeConfiguration({
+        dataDirectory,
+        environment: {
+          ...environment,
+          ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT: "true",
+          ARTIFACT_SERVER_CONTENT_DOMAIN: "example.com",
+        },
+        hostname: "127.0.0.1",
+        port: "8787",
+      }))).rejects.toMatchObject({reason: "invalid_origin"});
+      await expect(Effect.runPromise(parseCompactRuntimeConfiguration({
+        dataDirectory,
+        environment: {
+          ...environment,
+          ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT: "yes",
+          ARTIFACT_SERVER_CONTENT_DOMAIN: "art.example.com",
+        },
+        hostname: "127.0.0.1",
+        port: "8787",
+      }))).rejects.toMatchObject({
+        field: "ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT",
+        reason: "invalid_value",
+      });
       await expect(Effect.runPromise(parseCompactRuntimeConfiguration({
         dataDirectory,
         environment: {

@@ -11,6 +11,7 @@ services:
       - --port
       - "8787"
     environment:
+      - ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT
       - ARTIFACT_SERVER_CONTENT_DOMAIN=${ARTIFACT_SERVER_CONTENT_DOMAIN:?Set the separate wildcard content domain}
       - ARTIFACT_SERVER_OIDC_CLIENT_ID
       - ARTIFACT_SERVER_OIDC_CLIENT_SECRET

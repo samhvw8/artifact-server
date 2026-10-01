@@ -232,7 +232,11 @@ export const parseCompactRuntimeConfiguration = Effect.fn(
     input.environment["ARTIFACT_SERVER_CONTENT_DOMAIN"],
     hostnameSchema,
   );
-  yield* assertBrowserIsolation(applicationOrigin, contentDomain);
+  yield* assertBrowserIsolation(
+    applicationOrigin,
+    contentDomain,
+    yield* parseAllowSameSiteContent(input.environment),
+  );
   yield* ensureWritableDirectory(layout.dataDirectory);
   return {
     apiToken,
@@ -284,7 +288,11 @@ export const parseExternalStorageRuntimeConfiguration = Effect.fn(
     environment["ARTIFACT_SERVER_CONTENT_DOMAIN"],
     hostnameSchema,
   );
-  yield* assertBrowserIsolation(applicationOrigin, contentDomain);
+  yield* assertBrowserIsolation(
+    applicationOrigin,
+    contentDomain,
+    yield* parseAllowSameSiteContent(environment),
+  );
   yield* assertLinkedFilesAreLocalOnly(yield* parseLinkedFilesMode(environment));
   const configuredObjectStorage = yield* parseObjectStorage(environment);
   const apiToken = yield* readSecret(
@@ -832,9 +840,29 @@ function assertHttpsServiceUrl(
   return Effect.void;
 }
 
+/**
+ * Opt-in escape from the separate-registrable-domain rule, for installations
+ * that can only use one domain. Published pages then share a site with the
+ * application and can set cookies on the parent domain.
+ */
+function parseAllowSameSiteContent(
+  environment: Readonly<Record<string, string | undefined>>,
+): Effect.Effect<boolean, RuntimeConfigurationError> {
+  const value = environment["ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT"];
+  if (value === undefined || value === "" || value === "false") {
+    return Effect.succeed(false);
+  }
+  if (value === "true") return Effect.succeed(true);
+  return invalidValue(
+    "ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT",
+    "ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT must be true or false.",
+  );
+}
+
 function assertBrowserIsolation(
   applicationOrigin: string,
   contentDomain: string,
+  allowSameSiteContent: boolean,
 ): Effect.Effect<void, RuntimeConfigurationError> {
   let origin: URL;
   try {
@@ -865,10 +893,31 @@ function assertBrowserIsolation(
   }
   const applicationDomain = getDomain(origin.hostname, {allowPrivateDomains: true});
   const publishedDomain = getDomain(contentDomain, {allowPrivateDomains: true});
-  if (
-    applicationDomain === null || publishedDomain === null ||
-    applicationDomain === publishedDomain
-  ) {
+  if (applicationDomain === null || publishedDomain === null) {
+    return invalidValue(
+      "ARTIFACT_SERVER_CONTENT_DOMAIN",
+      "The application and published content must use registrable domains.",
+      "invalid_origin",
+    );
+  }
+  if (allowSameSiteContent) {
+    // Shared-site mode keeps origin isolation only: the application host must
+    // never itself be a content host.
+    const applicationHost = origin.hostname.toLowerCase();
+    const contentSuffix = contentDomain.toLowerCase();
+    if (
+      applicationHost === contentSuffix ||
+      applicationHost.endsWith(`.${contentSuffix}`)
+    ) {
+      return invalidValue(
+        "ARTIFACT_SERVER_CONTENT_DOMAIN",
+        "The application host cannot be inside the published content domain.",
+        "invalid_origin",
+      );
+    }
+    return Effect.void;
+  }
+  if (applicationDomain === publishedDomain) {
     return invalidValue(
       "ARTIFACT_SERVER_CONTENT_DOMAIN",
       "The application and published content must use different registrable domains.",
