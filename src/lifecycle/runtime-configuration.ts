@@ -96,6 +96,7 @@ export interface CompactRuntimeConfiguration {
   readonly linkRoots: readonly string[];
   readonly port: number;
   readonly readinessWithdrawalMilliseconds: number;
+  readonly sessionLifetimeMilliseconds: number;
   readonly shutdownDeadlineMilliseconds: number;
   readonly stagingCleanupPolicy: StagingCleanupPolicy;
 }
@@ -257,6 +258,7 @@ export const parseCompactRuntimeConfiguration = Effect.fn(
       "ARTIFACT_SERVER_READINESS_WITHDRAWAL_MS",
       1_000,
     ),
+    sessionLifetimeMilliseconds: yield* parseSessionLifetime(input.environment),
     shutdownDeadlineMilliseconds: yield* parseMilliseconds(
       input.environment,
       "ARTIFACT_SERVER_SHUTDOWN_DEADLINE_MS",
@@ -696,6 +698,28 @@ function parseMilliseconds(
     );
   }
   return Effect.succeed(milliseconds);
+}
+
+/**
+ * Browser login session lifetime in whole hours, 12 by default and at most a
+ * year. Sessions are absolute: using one does not extend it.
+ */
+function parseSessionLifetime(
+  environment: NodeJS.ProcessEnv,
+): Effect.Effect<number, RuntimeConfigurationError> {
+  const field = "ARTIFACT_SERVER_SESSION_LIFETIME_HOURS";
+  const value = environment[field];
+  if (value === undefined || value === "") {
+    return Effect.succeed(12 * 60 * 60 * 1_000);
+  }
+  const hours = Number(value);
+  if (!Number.isSafeInteger(hours) || hours < 1 || hours > 8_760) {
+    return invalidValue(
+      field,
+      `${field} must be an integer from 1 through 8760.`,
+    );
+  }
+  return Effect.succeed(hours * 60 * 60 * 1_000);
 }
 
 function parsePostgresMaxConnections(

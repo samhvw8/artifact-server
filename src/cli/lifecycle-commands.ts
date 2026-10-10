@@ -409,6 +409,7 @@ async function startCompactServer(
     readinessWithdrawalMilliseconds:
       configuration.readinessWithdrawalMilliseconds,
     serviceVersion: productVersion,
+    sessionLifetimeMilliseconds: configuration.sessionLifetimeMilliseconds,
     shutdownDeadlineMilliseconds: configuration.shutdownDeadlineMilliseconds,
     stagingCleanupPolicy: configuration.stagingCleanupPolicy,
   };

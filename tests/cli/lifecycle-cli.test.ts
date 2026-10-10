@@ -185,6 +185,45 @@ describe("Artifact Server lifecycle CLI", () => {
         field: "ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT",
         reason: "invalid_value",
       });
+      const defaultSessionLifetime = await Effect.runPromise(
+        parseCompactRuntimeConfiguration({
+          dataDirectory,
+          environment,
+          hostname: "127.0.0.1",
+          port: "8787",
+        }),
+      );
+      expect(defaultSessionLifetime.sessionLifetimeMilliseconds).toBe(
+        12 * 60 * 60 * 1_000,
+      );
+      const monthSessionLifetime = await Effect.runPromise(
+        parseCompactRuntimeConfiguration({
+          dataDirectory,
+          environment: {
+            ...environment,
+            ARTIFACT_SERVER_SESSION_LIFETIME_HOURS: "720",
+          },
+          hostname: "127.0.0.1",
+          port: "8787",
+        }),
+      );
+      expect(monthSessionLifetime.sessionLifetimeMilliseconds).toBe(
+        720 * 60 * 60 * 1_000,
+      );
+      await Promise.all(["0", "1.5", "8761", "month"].map((invalid) =>
+        expect(Effect.runPromise(parseCompactRuntimeConfiguration({
+          dataDirectory,
+          environment: {
+            ...environment,
+            ARTIFACT_SERVER_SESSION_LIFETIME_HOURS: invalid,
+          },
+          hostname: "127.0.0.1",
+          port: "8787",
+        }))).rejects.toMatchObject({
+          field: "ARTIFACT_SERVER_SESSION_LIFETIME_HOURS",
+          reason: "invalid_value",
+        })
+      ));
       await expect(Effect.runPromise(parseCompactRuntimeConfiguration({
         dataDirectory,
         environment: {

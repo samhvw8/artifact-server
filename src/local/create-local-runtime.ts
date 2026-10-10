@@ -111,6 +111,8 @@ export interface LocalRuntimeConfig {
   readonly runtimeLifecycle?: RuntimeLifecycle;
   readonly installationId?: string;
   readonly serviceVersion?: string;
+  /** Browser login session lifetime; absent keeps the 12-hour default. */
+  readonly sessionLifetimeMilliseconds?: number;
   readonly stagingCleanupPolicy?: StagingCleanupPolicy;
   /** Overrides the compiled web bundle directory; used by tests. */
   readonly webAssetsRoot?: string;
@@ -264,6 +266,12 @@ export async function createLocalRuntime(
     staging,
     stagingCleanupPolicy,
   };
+  if (config.sessionLifetimeMilliseconds !== undefined) {
+    applicationAdapters = {
+      ...applicationAdapters,
+      sessionLifetimeMilliseconds: config.sessionLifetimeMilliseconds,
+    };
+  }
   if (gitHistoryProvider !== null) {
     Object.assign(applicationAdapters, {gitHistoryProvider});
   }

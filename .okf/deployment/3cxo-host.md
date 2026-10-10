@@ -5,7 +5,7 @@ description: Layout of the live installation on host 3cxo — domains, container
 resource: ssh://root@36.50.176.213
 tags: [deployment, 3cxo, nginx, certbot, docker]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-01T07:10:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-10T10:30:00Z' }
 stale_after: 2026-12-29
 sources:
   - id: host-inspection
@@ -50,6 +50,7 @@ Key `.env` settings (values other than secrets):
 ARTIFACT_SERVER_ORIGIN=https://artifacts.3cxo.work
 ARTIFACT_SERVER_CONTENT_DOMAIN=art.3cxo.work
 ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT=true
+ARTIFACT_SERVER_SESSION_LIFETIME_HOURS=720   # 30-day browser login, see /features/session-lifetime.md
 ARTIFACT_SERVER_ALLOW_TEST_IMAGE_TAG=true   # lets the backup script accept local image tags
 ```
 

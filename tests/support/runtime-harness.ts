@@ -103,6 +103,7 @@ export async function startTestServer(
     readonly mcpOAuthResource?: McpOAuthResourceConfiguration;
     readonly observability?: boolean;
     readonly port?: number;
+    readonly sessionLifetimeMilliseconds?: number;
     readonly webAssetsRoot?: string;
   } = {},
 ): Promise<RunningTestServer> {
@@ -126,6 +127,12 @@ export async function startTestServer(
   }
   if (options.clock !== undefined) {
     config = {...config, clock: options.clock};
+  }
+  if (options.sessionLifetimeMilliseconds !== undefined) {
+    config = {
+      ...config,
+      sessionLifetimeMilliseconds: options.sessionLifetimeMilliseconds,
+    };
   }
   if (options.apiOAuthResource !== undefined) {
     config = {...config, apiOAuthResource: options.apiOAuthResource};

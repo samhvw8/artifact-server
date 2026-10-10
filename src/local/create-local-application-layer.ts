@@ -179,6 +179,8 @@ export interface ApplicationAdapters {
     GitHistoryMirrorStore &
     PublicLinkInventoryStore &
     StagedUploadRepository;
+  /** Browser login session lifetime; absent keeps the 12-hour default. */
+  readonly sessionLifetimeMilliseconds?: number;
   readonly staging: StagingStore;
   readonly stagingCleanupPolicy?: {
     readonly concurrency: number;
@@ -881,7 +883,8 @@ export function createApplicationLayer(
       digest: digestIdentitySecret,
       issue: () => randomBase64Url(32),
     },
-    sessionLifetimeMilliseconds: 12 * 60 * 60 * 1_000,
+    sessionLifetimeMilliseconds:
+      adapters.sessionLifetimeMilliseconds ?? 12 * 60 * 60 * 1_000,
   });
   const authenticationLayer = Layer.effect(
     AuthenticationService,

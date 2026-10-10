@@ -656,6 +656,34 @@ describe("installation identity and access", () => {
     expect(await sessionStatus(expiring.header)).toBe(401);
   });
 
+  test("AUTH-022-F: a configured session lifetime replaces the 12-hour default", async () => {
+    await server.stop();
+    const thirtyDays = 30 * 24 * 60 * 60 * 1_000;
+    server = await startTestServer(installation, {
+      clock,
+      sessionLifetimeMilliseconds: thirtyDays,
+    });
+    const token = await issueLocalBrowserLogin(server, installation);
+    const login = await fetch(
+      `${server.baseUrl}/auth/local?token=${token}`,
+      {redirect: "manual"},
+    );
+    expect(login.status).toBe(303);
+    const cookies = applicationCookies(login.headers.getSetCookie());
+    const sessionStatus = async (): Promise<number> => {
+      const response = await fetch(`${server.baseUrl}/api/v1/session`, {
+        headers: {Cookie: cookies.header},
+      });
+      return response.status;
+    };
+    clock.advance(13 * 60 * 60 * 1_000);
+    expect(await sessionStatus()).toBe(200);
+    clock.advance(thirtyDays - 13 * 60 * 60 * 1_000 - 60_000);
+    expect(await sessionStatus()).toBe(200);
+    clock.advance(120_000);
+    expect(await sessionStatus()).toBe(401);
+  });
+
   test("AUTH-001-B AUTH-001-F AUTH-028-B: external login admits only the configured first administrator and consumes state once", async () => {
     await server.stop();
     const provider = new TestIdentityProvider({
