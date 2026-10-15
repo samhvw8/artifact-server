@@ -141,12 +141,10 @@ test.describe("Artifact Server frontend MVP", () => {
       await expect(preview.getByRole("heading", {name: "Review preview content"}))
         .toBeVisible();
 
+      // HTML opens in interact mode (fork default): controls work before any comment.
       const annotateMode = fixture.page.getByRole("button", {
         name: /^Annotate mode:/u,
       });
-      await expect(annotateMode).toHaveAttribute("aria-pressed", "true");
-      await preview.locator("#review-native-action").focus();
-      await fixture.page.keyboard.press("Escape");
       const interactMode = fixture.page.getByRole("button", {
         name: /^Interact mode:/u,
       });
@@ -155,6 +153,11 @@ test.describe("Artifact Server frontend MVP", () => {
       await expect(preview.locator("#review-native-action"))
         .toHaveAttribute("data-clicked", "true");
       await expect(reviewFrame.getByPlaceholder("Add a comment...")).toHaveCount(0);
+      await interactMode.click();
+      await expect(annotateMode).toHaveAttribute("aria-pressed", "true");
+      await preview.locator("#review-native-action").focus();
+      await fixture.page.keyboard.press("Escape");
+      await expect(interactMode).toHaveAttribute("aria-pressed", "false");
       await interactMode.click();
       await expect(annotateMode).toHaveAttribute("aria-pressed", "true");
 
@@ -457,9 +460,6 @@ test.describe("Artifact Server frontend MVP", () => {
       await fixture.page.locator(".as-preview-panel").focus();
       await fixture.page.keyboard.press("f");
       await expect(fixture.page.getByRole("button", {name: "Exit full screen"})).toBeVisible();
-      await expect(fixture.page.getByRole("button", {name: "Annotate mode", exact: true}))
-        .toHaveAttribute("aria-pressed", "true");
-      await fixture.page.keyboard.press("Escape");
       const focusInteractMode = fixture.page.getByRole("button", {
         name: "Interact mode",
         exact: true,

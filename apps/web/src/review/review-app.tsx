@@ -567,7 +567,8 @@ function ArtifactReview({
   const [focusControlsCollapsed, setFocusControlsCollapsed] = useState(false);
   const [focusControlsHoverArmed, setFocusControlsHoverArmed] = useState(true);
   const [focusControlsInstant, setFocusControlsInstant] = useState(false);
-  const [htmlAnnotateModeActive, setHtmlAnnotateModeActive] = useState(true);
+  // Fork default: HTML opens in interact mode so pages work on first load; the toggle turns on annotating.
+  const [htmlAnnotateModeActive, setHtmlAnnotateModeActive] = useState(false);
   const [homeOpen, setHomeOpen] = useState(false);
   const focusCommentsButtonRef = useRef<HTMLButtonElement>(null);
   const focusControlsRestoreRef = useRef<HTMLButtonElement>(null);

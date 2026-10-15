@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-10-15
+* **Creation**: [Review opens in interact mode](/features/review-interact-default.md) — HTML previews start in interact mode instead of annotate mode.
+
 ## 2026-10-10
 * **Creation**: [Browser session lifetime](/features/session-lifetime.md) — `ARTIFACT_SERVER_SESSION_LIFETIME_HOURS`, set to 720 on 3cxo.
 * **Update**: [Artifact Server on 3cxo](/deployment/3cxo-host.md) and [Pull an upstream release](/playbooks/sync-upstream.md) list the new setting.
