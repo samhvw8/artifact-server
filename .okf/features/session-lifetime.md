@@ -5,7 +5,7 @@ description: ARTIFACT_SERVER_SESSION_LIFETIME_HOURS sets how long a browser logi
 resource: src/lifecycle/runtime-configuration.ts
 tags: [configuration, authentication, fork-change]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-10T10:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-21T09:00:00Z' }
 sources:
   - id: runtime-config
     resource: src/lifecycle/runtime-configuration.ts
@@ -34,7 +34,10 @@ Sessions stay absolute: using one does not extend it. The session cookie's
 Any other value fails startup with `invalid_value` on the variable. A change
 applies only to sessions issued after the restart.
 
-`packaging/compose/compose.yaml` passes the variable through to the container.
+`packaging/compose/compose.yaml` passes the variable through to the container
+(upstream packaging). On 3cxo there is no compose since 2026-10-21: the value
+lives in `/opt/artifact-server/container.env`, read by the Podman quadlet (see
+[Artifact Server on 3cxo](/deployment/3cxo-host.md)).
 The external-storage runtime does not read it and keeps 12 hours.
 
 # Risk accepted

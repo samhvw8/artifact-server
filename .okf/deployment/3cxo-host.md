@@ -1,11 +1,11 @@
 ---
 type: Deployment
 title: Artifact Server on 3cxo
-description: Layout of the live installation on host 3cxo — domains, containers, nginx, certificates, login, and backups.
+description: Layout of the live installation on host 3cxo — domains, the Podman quadlet unit, nginx, certificates, login, and backups.
 resource: ssh://root@36.50.176.213
-tags: [deployment, 3cxo, nginx, certbot, docker]
+tags: [deployment, 3cxo, nginx, certbot, podman, quadlet]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-10T10:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-21T08:30:00Z' }
 stale_after: 2026-12-29
 sources:
   - id: host-inspection
@@ -36,26 +36,32 @@ on 2026-10-01 so `voxtract.app` stays with its own product.
 
 # Services
 
+Since 2026-10-21 the server runs under rootful **Podman** as a systemd
+quadlet unit; Docker is masked on the host. The host side is documented in the
+infra bundle (`~/workspace/infra/.okf/servers/3cxo.md`, section "Containers
+(Podman)", and `decisions/containers-on-3cxo.md`).
+
 | Path | What |
 |------|------|
-| `/opt/artifact-server/` | `compose.yaml`, `.env` (secrets, mode 600), upstream backup/restore scripts, `.env.bak-*` and `compose.yaml.bak-*` |
-| `/opt/artifact-server-src/` | Source tree shipped by each deploy; images are built here |
-| Docker volume `artifact-server_artifact-server-data` | Data: `data/artifact-server.db` (SQLite) and blobs |
-| Container `artifact-server-app` | Image `local/artifact-server:<rev>-<timestamp>`, listens on `127.0.0.1:8787` |
-| `/opt/pocket-id/` | Pocket ID v2.16.0 on `127.0.0.1:1411` (Docker) |
+| `/etc/containers/systemd/artifact-server.container` | Quadlet → `artifact-server.service`. Same hardening as upstream's compose file (read-only root, `/tmp` tmpfs 32 MB noexec, user 1000:1000, `cap-drop all`, `no-new-privileges`, init, 256 pids, 15 s stop). `Image=` is rewritten by each deploy. `Notify=healthy` with a 2 s startup check, so `systemctl restart` returns once `/health` passes |
+| `/opt/artifact-server/container.env` | Settings (mode 600): exactly the variables the compose setup passed to the container |
+| `/opt/artifact-server/artifact-server.container.bak-*` | Quadlet copies saved by each deploy, for rollback |
+| `/opt/artifact-server/docker-retired/` | The old `compose.yaml`, `.env`, upstream `compact-*.sh` scripts |
+| `/opt/artifact-server-src/` | Source tree shipped by each deploy; images are built here with `podman build` |
+| `/var/lib/artifact-server` | Data bind mount: `data/artifact-server.db` (SQLite) and blobs. Copied from the Docker volume `artifact-server_artifact-server-data` on 2026-10-21 |
+| Container `artifact-server-app` | Image `localhost/artifact-server:<rev>-<timestamp>`, listens on `127.0.0.1:8787` |
+| `/opt/pocket-id/` | Pocket ID v2.16.0 on `127.0.0.1:1411` (Podman quadlet `pocket-id.service`) |
 
-Key `.env` settings (values other than secrets):
+Key settings in `container.env` (values other than secrets):
 
 ```dotenv
 ARTIFACT_SERVER_ORIGIN=https://artifacts.3cxo.work
 ARTIFACT_SERVER_CONTENT_DOMAIN=art.3cxo.work
 ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT=true
 ARTIFACT_SERVER_SESSION_LIFETIME_HOURS=720   # 30-day browser login, see /features/session-lifetime.md
-ARTIFACT_SERVER_ALLOW_TEST_IMAGE_TAG=true   # lets the backup script accept local image tags
 ```
 
-Docker comes from Ubuntu packages (`docker.io`, `docker-compose-v2`,
-`docker-buildx`). Login is OIDC through Pocket ID with a public PKCE client;
+Podman 5.7 comes from Ubuntu 26.04 packages. Login is OIDC through Pocket ID with a public PKCE client;
 sign-ups are disabled and only the owner is admitted.[^setup-session]
 
 # nginx and TLS
@@ -74,13 +80,21 @@ edit DNS in both `3cxo.work` and `voxtract.app`.
 
 # Backups
 
-- Each deploy runs upstream's `compact-backup.sh` into
-  `/srv/backups/artifact-server/pre-deploy-<timestamp>/` (about 370 MB each)
-  and keeps the five newest.
+- `/usr/local/sbin/artifact-server-backup DIR` replaces upstream's
+  compose-based `compact-backup.sh` with the same layout (`data.tar`,
+  `data.tar.sha256`, `support-manifest.json`); it stops the unit for about a
+  minute. `/usr/local/sbin/artifact-server-restore DIR` replaces
+  `compact-restore.sh` and keeps its checks.
+- Nightly: `backup-artifacts.timer` (03:30 UTC) into
+  `/srv/backups/artifact-server/<date>/`, 14 days kept, Telegram alert on
+  failure. The old cron never succeeded; the first good nightly run was
+  2026-10-21.
+- Each deploy backs up into
+  `/srv/backups/artifact-server/pre-deploy-<timestamp>/` (about 1.4 GB each
+  now) and keeps the five newest. `pre-podman-20261021-074644/` was taken by
+  the upstream script just before the move to Podman.
 - A one-off backup from before the same-site switch is in
   `pre-samesite-20261001-0332/`.
-- The nightly backup cron from the original setup was broken and has not
-  been fixed.
 
 # Operations
 
@@ -90,9 +104,14 @@ edit DNS in both `3cxo.work` and `voxtract.app`.
 
 # Open items
 
-- Old images (about 1.25 GB each) build up in Docker; prune them by hand.
-- Running without Docker (Node under systemd) was proposed and not decided.
-  Docker stays installed either way while Pocket ID uses it.
+- `integrity check` reports `corrupt` since a version saved after 2026-10-15:
+  `manifest_invalid` ("The saved manifest does not match its stored entries")
+  for `art_3e10ed4c…`/`ver_6e7e7083…` and `art_f0bd4dc7…`/`ver_16436d77…`.
+  The 2026-10-15 pre-deploy backup is healthy. The restore script refuses any
+  backup that fails the check, so fix these two versions before a restore is
+  needed.
+- The deploy keeps the three newest images; build cache layers stay until
+  `podman image prune -a`.
 
 [^host-inspection]: Inspection of /opt/artifact-server, /etc/nginx, /etc/letsencrypt on 2026-10-01
 [^setup-session]: Original setup session (Artifact alternative self-hosting)

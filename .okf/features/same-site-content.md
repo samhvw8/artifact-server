@@ -5,7 +5,7 @@ description: ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT lets the content domain sha
 resource: src/lifecycle/runtime-configuration.ts
 tags: [configuration, security, fork-change]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-10-01T07:10:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-21T09:00:00Z' }
 sources:
   - id: runtime-config
     resource: src/lifecycle/runtime-configuration.ts
@@ -41,7 +41,10 @@ With the flag on, startup still fails when:
 Any other value than `true`, `false` or empty fails with
 `invalid_value` on `ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT`.
 
-`packaging/compose/compose.yaml` passes the variable through to the container.
+`packaging/compose/compose.yaml` passes the variable through to the container
+(upstream packaging). On 3cxo there is no compose since 2026-10-21: the value
+lives in `/opt/artifact-server/container.env`, read by the Podman quadlet (see
+[Artifact Server on 3cxo](/deployment/3cxo-host.md)).
 
 # Risk accepted
 

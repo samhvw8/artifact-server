@@ -2,8 +2,8 @@
 # Build this checkout on the 3cxo host and restart Artifact Server on it.
 #
 # Ships the tracked files (working-tree contents) to /opt/artifact-server-src,
-# builds the OCI image there, backs up the data, then points
-# /opt/artifact-server/.env at the new image and restarts the container.
+# builds the OCI image there with Podman, backs up the data, then points the
+# artifact-server quadlet at the new image and restarts the unit.
 #
 # Usage: deploy/3cxo/deploy.sh            (host defaults to the `3cxo` ssh alias)
 #        ARTIFACT_DEPLOY_HOST=other deploy/3cxo/deploy.sh
@@ -19,17 +19,17 @@ revision=$(git rev-parse --short HEAD)
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   revision="${revision}-dirty"
 fi
-tag="local/artifact-server:${revision}-$(date +%Y%m%d%H%M%S)"
+tag="localhost/artifact-server:${revision}-$(date +%Y%m%d%H%M%S)"
 
 printf 'Shipping %s to %s\n' "$revision" "$host"
 git ls-files -z | tar --null -czf - -T - | ssh "$host" \
   'rm -rf /opt/artifact-server-src && mkdir -p /opt/artifact-server-src && tar -xzf - -C /opt/artifact-server-src'
 
-# The remote steps run from a shipped file, not stdin: docker compose reads
-# stdin, which would swallow the rest of a piped script.
+# The remote steps run from a shipped file, not stdin: a command that reads
+# stdin would swallow the rest of a piped script.
 ssh "$host" bash /opt/artifact-server-src/deploy/3cxo/remote-build.sh "$tag" "$revision"
 
-running=$(ssh "$host" docker inspect artifact-server-app --format '{{.Config.Image}}')
+running=$(ssh "$host" podman inspect artifact-server-app --format '{{.ImageName}}')
 if [[ "$running" != "$tag" ]]; then
   printf 'Deploy failed: the container runs %s, expected %s.\n' "$running" "$tag" >&2
   exit 1

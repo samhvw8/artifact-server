@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remote half of deploy/3cxo/deploy.sh. Runs on the host from the shipped
-# source tree: builds the image, backs up the data, switches .env to the new
-# image, and restarts the container.
+# source tree: builds the image with Podman, backs up the data, points the
+# artifact-server quadlet at the new image, and restarts the unit.
 #
 # Usage: remote-build.sh IMAGE_TAG REVISION
 
@@ -9,8 +9,14 @@ set -euo pipefail
 tag=$1
 revision=$2
 source_directory=/opt/artifact-server-src
-compose_directory=/opt/artifact-server
+quadlet=/etc/containers/systemd/artifact-server.container
 cd "$source_directory"
+
+running=$(sed -n 's/^Image=//p' "$quadlet")
+if [[ -z "$running" ]]; then
+  echo "No Image= line in $quadlet." >&2
+  exit 1
+fi
 
 # Upstream's Dockerfile downloads the AWS RDS CA bundle and pins its checksum.
 # When AWS republishes the bundle the pin breaks the build, so reuse the
@@ -18,10 +24,9 @@ cd "$source_directory"
 dockerfile=packaging/oci/Dockerfile
 pem=packaging/oci/aws-rds-global-bundle.pem
 pinned=$(grep -o 'checksum=sha256:[0-9a-f]*' "$dockerfile" | cut -d: -f2)
-running=$(grep '^ARTIFACT_SERVER_IMAGE=' "$compose_directory/.env" | cut -d= -f2-)
-container=$(docker create "$running")
-docker cp "$container:/usr/local/share/ca-certificates/aws-rds-global-bundle.pem" "$pem"
-docker rm "$container" >/dev/null
+container=$(podman create "$running")
+podman cp "$container:/usr/local/share/ca-certificates/aws-rds-global-bundle.pem" "$pem"
+podman rm "$container" >/dev/null
 if [[ "$(sha256sum "$pem" | cut -d' ' -f1)" == "$pinned" ]]; then
   python3 - "$dockerfile" <<'PY'
 import re, sys
@@ -39,36 +44,31 @@ PY
   dockerfile="$dockerfile.3cxo"
 fi
 
-docker buildx build --load -f "$dockerfile" \
+podman build -f "$dockerfile" \
   --build-arg IMAGE_REVISION="$revision" \
   --build-arg IMAGE_VERSION="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')-3cxo" \
-  -t "$tag" .
+  -t "$tag" . </dev/null
 
-cd "$compose_directory"
-if ! grep -q '^ARTIFACT_SERVER_IMAGE=' .env; then
-  echo "ARTIFACT_SERVER_IMAGE is missing from $compose_directory/.env." >&2
-  exit 1
-fi
 backup="/srv/backups/artifact-server/pre-deploy-$(date +%Y%m%d-%H%M%S)"
-# Load .env only inside this subshell: an exported ARTIFACT_SERVER_IMAGE
-# would override .env for the docker compose call below.
-(
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-  ./compact-backup.sh "$backup" </dev/null
-)
+/usr/local/sbin/artifact-server-backup "$backup"
 # Keep the five newest pre-deploy backups.
 find /srv/backups/artifact-server -maxdepth 1 -name 'pre-deploy-*' -type d \
   | sort | head -n -5 | xargs -r rm -rf
 
 stamp=$(date +%Y%m%d-%H%M%S)
-cp -p .env ".env.bak-$stamp"
-cp -p compose.yaml "compose.yaml.bak-$stamp"
-install -m 0644 "$source_directory/packaging/compose/compose.yaml" compose.yaml
-sed -i "s|^ARTIFACT_SERVER_IMAGE=.*|ARTIFACT_SERVER_IMAGE=$tag|" .env
-printf 'Rollback: cp %s/.env.bak-%s .env && cp %s/compose.yaml.bak-%s compose.yaml && docker compose up -d\n' \
-  "$compose_directory" "$stamp" "$compose_directory" "$stamp"
-docker compose up -d --wait artifact-server </dev/null
+saved="/opt/artifact-server/artifact-server.container.bak-$stamp"
+cp -p "$quadlet" "$saved"
+sed -i "s|^Image=.*|Image=$tag|" "$quadlet"
+systemctl daemon-reload
+printf 'Rollback: cp %s %s && systemctl daemon-reload && systemctl restart artifact-server\n' \
+  "$saved" "$quadlet"
+# Notify=healthy: restart returns once the new container passes its healthcheck.
+systemctl restart artifact-server
+
+# Keep the three newest artifact-server images (one is the running one) and
+# drop dangling build layers.
+podman images --sort created --format '{{.CreatedAt}}\t{{.Repository}}:{{.Tag}}' \
+  | awk -F'\t' '$2 ~ /\/artifact-server:/' | sort -r | cut -f2 | tail -n +4 \
+  | xargs -r podman rmi >/dev/null || true
+podman image prune -f >/dev/null
 printf 'Running %s; backup at %s\n' "$tag" "$backup"

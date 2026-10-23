@@ -4,7 +4,7 @@ title: Pull an upstream release into the fork
 description: Merge a new plannotator/artifact-server release into branch 3cxo, re-test, and deploy.
 tags: [playbook, upstream, fork]
 status: draft
-generated: { by: claude-code/opus-5.5, at: '2026-10-10T10:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-10-21T09:00:00Z' }
 ---
 
 # Trigger
@@ -27,7 +27,7 @@ A new release on `plannotator/artifact-server`.
    | `src/local/create-local-runtime.ts` | short-name store wiring, session lifetime |
    | `src/core/errors.ts` | `shortName` repository operation |
    | `apps/web/src/review/review-app.tsx`, `apps/web/src/api/client.ts`, `apps/web/src/review/review.css` | Short name UI |
-   | `packaging/compose/compose.yaml` | `ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT` and `ARTIFACT_SERVER_SESSION_LIFETIME_HOURS` passthrough |
+   | `packaging/compose/compose.yaml` | `ARTIFACT_SERVER_ALLOW_SAME_SITE_CONTENT` and `ARTIFACT_SERVER_SESSION_LIFETIME_HOURS` passthrough (not used on 3cxo since 2026-10-21, which runs a Podman quadlet with `container.env`; keep it only for compose users of the fork) |
    | `tests/cli/mcp-onboarding.test.ts`, `tests/conformance/mcp-modern-http.test.ts` | tool count 35 and short-name calls |
 
 4. If upstream added MCP tools, the tool-count assertions become upstream
