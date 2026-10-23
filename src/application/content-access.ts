@@ -137,6 +137,15 @@ export interface IssueContentBootstrapCommand {
     | {readonly kind: "version"; readonly versionId: string};
 }
 
+/**
+ * Input for issuing a bootstrap from a content-host address alone, when a
+ * signed-in member opens a private version link directly.
+ */
+export interface IssueContentBootstrapForTokenCommand {
+  readonly contentToken: string;
+  readonly principal: Principal;
+}
+
 /** Input for exchanging a one-time bootstrap on its bound content host. */
 export interface ExchangeContentBootstrapCommand {
   readonly contentToken: string;
@@ -203,6 +212,9 @@ interface ContentAccessOperations {
   ) => Effect.Effect<IssuedContentSession, ContentAccessFailure>;
   readonly issueContentBootstrap: (
     command: IssueContentBootstrapCommand,
+  ) => Effect.Effect<IssuedContentBootstrap, ContentAccessFailure>;
+  readonly issueContentBootstrapForToken: (
+    command: IssueContentBootstrapForTokenCommand,
   ) => Effect.Effect<IssuedContentBootstrap, ContentAccessFailure>;
   readonly issuePreviewLease: (
     command: IssuePreviewLeaseCommand,
@@ -306,6 +318,28 @@ function makeContentAccessService(
       token: secret.token,
       versionId: target.id,
     };
+  });
+
+  const issueContentBootstrapForToken = Effect.fn(
+    "ContentAccessService.issueContentBootstrapForToken",
+  )(function*(command: IssueContentBootstrapForTokenCommand) {
+    const content = yield* dependencies.repository.findVersionContent(
+      command.contentToken,
+      "",
+      "entry",
+    );
+    if (content === null) {
+      return yield* Effect.fail(
+        new VersionNotFound({message: "The saved version does not exist."}),
+      );
+    }
+    // The same project and artifact checks as a Review-issued bootstrap.
+    return yield* issueContentBootstrap({
+      artifactId: content.artifactId,
+      principal: command.principal,
+      projectId: content.projectId,
+      target: {kind: "version", versionId: content.versionId},
+    });
   });
 
   const issuePreviewLease = Effect.fn(
@@ -463,6 +497,7 @@ function makeContentAccessService(
     authorizeVersionContent,
     exchangeContentBootstrap,
     issueContentBootstrap,
+    issueContentBootstrapForToken,
     issuePreviewLease,
     resolvePublicArtifact,
   });

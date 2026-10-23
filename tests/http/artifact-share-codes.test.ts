@@ -163,8 +163,10 @@ describe("artifact share codes", () => {
     const cleared = await setCode(privateArtifact.artifact.id, null);
     expect(shareCodeSchema.parse(await cleared.json()).shareCode).toBeNull();
     const plain = await fetchVersion(server, `${host}/`, "GET", navigation);
-    expect(plain.status).toBe(401);
-    expect(plain.headers.get("content-type")).toContain("application/json");
+    // Without a code the host falls back to normal private handling, which
+    // sends a page load to sign in (features/direct-version-links).
+    expect(plain.status).toBe(302);
+    expect(new URL(plain.headers.get("location") ?? "").pathname).toBe("/content/open");
   });
 
   test("a short-name host asks for the code and then serves in place", async () => {

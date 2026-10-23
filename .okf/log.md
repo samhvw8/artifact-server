@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-10-23
+* **Creation**: [Direct version links](/features/direct-version-links.md) — version hosts bounce page loads without a content session through `/content/open`, which issues a bootstrap from the sign-in session. The share-code test now expects that bounce after a code is cleared. Deployed to 3cxo as `5c3f200-dirty-20261023223903`.
+
 ## 2026-10-21
 * **Update**: [Same-site content](/features/same-site-content.md), [Browser session lifetime](/features/session-lifetime.md), [Pull an upstream release](/playbooks/sync-upstream.md) — on 3cxo the settings now live in `container.env` (Podman quadlet), not compose. [Data slots](/features/data-slots.md) — host note: no compose on 3cxo any more.
 * **Update**: [Artifact Server on 3cxo](/deployment/3cxo-host.md) and [Deploy the fork to 3cxo](/playbooks/deploy-to-3cxo.md) — the host moved from Docker compose to a rootful Podman quadlet unit; data now in `/var/lib/artifact-server`; `deploy/3cxo/*.sh` use `podman build` and the quadlet's `Image=`; nightly backups fixed (timer + Telegram alert). Open item added: two versions fail `integrity check` (`manifest_invalid`).

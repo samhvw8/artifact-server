@@ -73,6 +73,7 @@ import {
   type ArtifactServerFailure,
   CapabilityUnavailable,
   ContentBootstrapRejected,
+  ContentSessionRequired,
   errorCodes,
   InvalidPagination,
   isArtifactServerFailure,
@@ -469,6 +470,10 @@ const interactiveCallbackSchema = z.object({
   code: z.string().min(1).max(4_096),
   state: z.string().min(16).max(4_096),
 });
+const contentOpenQuerySchema = z.object({
+  path: z.string().max(1_024).optional(),
+  token: contentTokenSchema,
+});
 const sessionTokenSchema = z.string().min(32).max(200)
   .regex(/^[A-Za-z0-9_-]+$/u);
 const csrfTokenSchema = sessionTokenSchema;
@@ -776,13 +781,21 @@ export function createHttpApp(
         shareCodeAttempts,
       );
       if (sharedResponse !== null) return sharedResponse;
-      return serveVersionContent(
-        context,
-        requestUrl,
-        contentToken,
-        context.req.header("cookie"),
-        dependencies,
-      );
+      try {
+        return await serveVersionContent(
+          context,
+          requestUrl,
+          contentToken,
+          context.req.header("cookie"),
+          dependencies,
+        );
+      } catch (error) {
+        const bounce = error instanceof ContentSessionRequired
+          ? contentOpenBounce(context, requestUrl, contentToken, dependencies)
+          : null;
+        if (bounce === null) throw error;
+        return bounce;
+      }
     }
     return next();
   });
@@ -1030,6 +1043,67 @@ export function createHttpApp(
     context.header("Cache-Control", "private, no-store");
     context.header("Referrer-Policy", "no-referrer");
     return context.redirect("/", 303);
+  });
+
+  // A member opened a private version link without a content session for
+  // that host. The application session cannot reach the content host, so it
+  // issues the same one-time bootstrap Review would, or asks for sign-in.
+  app.get("/content/open", async (context) => {
+    const query = contentOpenQuerySchema.parse(context.req.query());
+    const requestUrl = new URL(context.req.url);
+    const signIn = () => {
+      context.header("Cache-Control", "private, no-store");
+      if (dependencies.browserAccess.mode === browserAccessModes.localOwner) {
+        return context.redirect("/", 302);
+      }
+      const returnTo = `${requestUrl.pathname}${requestUrl.search}`;
+      return context.redirect(
+        `/auth/login?${new URLSearchParams({returnTo}).toString()}`,
+        302,
+      );
+    };
+    const parsedSession = sessionTokenSchema.safeParse(
+      getCookie(context, applicationCookieNames(dependencies).session),
+    );
+    if (!parsedSession.success) return signIn();
+    let principal: Principal;
+    try {
+      principal = (await runHttpApplicationEffect(
+        context,
+        dependencies,
+        AuthenticationService.use((authentication) =>
+          authentication.authenticateApplicationSession(
+            Redacted.make(parsedSession.data, {label: "application-session"}),
+          )
+        ),
+      )).principal;
+    } catch (error) {
+      if (error instanceof AuthenticationRequired) return signIn();
+      throw error;
+    }
+    const issued = await runHttpApplicationEffect(
+      context,
+      dependencies,
+      ContentAccessService.use((contentAccess) =>
+        contentAccess.issueContentBootstrapForToken({
+          contentToken: query.token,
+          principal,
+        })
+      ),
+    );
+    const destination = manifestPathFromUrl(query.path ?? "/");
+    context.header("Cache-Control", "private, no-store");
+    context.header("Referrer-Policy", "no-referrer");
+    return context.redirect(
+      contentBootstrapBrowserUrl(
+        responseApplicationUrl(context, dependencies),
+        dependencies.contentDomain,
+        issued.contentToken,
+        Redacted.value(issued.token),
+        destination === null || destination === "" ? undefined : destination,
+      ),
+      302,
+    );
   });
 
   app.get("/auth/login", async (context) => {
@@ -4534,6 +4608,44 @@ function tokenFromContentHost(
   const candidate = normalizedHostname.slice(0, -suffix.length);
   const parsed = contentTokenSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Send a top-level page load that lacks a content session to the application
+ * origin, which can see the member's sign-in. Only navigations from another
+ * page, the address bar or a bookmark bounce: a same-origin navigation is
+ * either the bootstrap exchange's own refresh or a link inside the artifact,
+ * and bouncing it could loop forever when the browser refuses the cookie.
+ * Subresource and script requests keep the plain 401.
+ */
+function contentOpenBounce(
+  context: Context<HttpEnvironment>,
+  requestUrl: URL,
+  contentToken: string,
+  dependencies: HttpAppDependencies,
+): Response | null {
+  if (
+    dependencies.trustedApplicationOrigin === null ||
+    context.req.method !== "GET" ||
+    context.req.header("sec-fetch-mode") !== "navigate" ||
+    context.req.header("sec-fetch-dest") !== "document" ||
+    context.req.header("sec-fetch-site") === "same-origin"
+  ) {
+    return null;
+  }
+  const location = new URL("/content/open", dependencies.trustedApplicationOrigin);
+  location.search = new URLSearchParams({
+    path: requestUrl.pathname,
+    token: contentToken,
+  }).toString();
+  return new Response(null, {
+    headers: {
+      "Cache-Control": "no-store",
+      Location: location.toString(),
+      "Referrer-Policy": "no-referrer",
+    },
+    status: 302,
+  });
 }
 
 function isContentBootstrapRequest(requestUrl: URL): boolean {

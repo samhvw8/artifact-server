@@ -7,3 +7,4 @@
 * [Data slots fallback (draft)](data-slots-fallback.md) - whole-file slot design, built only if the Turso test fails.
 * [Browser session lifetime](session-lifetime.md) - `ARTIFACT_SERVER_SESSION_LIFETIME_HOURS` replaces the fixed 12-hour login.
 * [Review opens in interact mode](review-interact-default.md) - HTML artifacts start in interact mode; annotate is one click away.
+* [Direct version links](direct-version-links.md) - a private version link opened directly bounces through the sign-in session instead of answering `CONTENT_NOT_PUBLIC`.
